@@ -432,4 +432,12 @@ config DM_SWITCH
 
 	  If unsure, say N.
 
+config DM_DEDUP
+	tristate "Deduplication target (EXPERIMENTAL)"
+	depends on BLK_DEV_DM
+	select DM_PERSISTENT_DATA
+	select CRYPTO
+	---help---
+	  This device-maper target performs data deduplication.
+
 endif # MD
