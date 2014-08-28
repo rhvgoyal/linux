@@ -744,6 +744,39 @@ static void dm_dedup_dtr_fn(struct dm_target *ti)
 	kfree(dc);
 }
 
+static void dm_dedup_status_fn(struct dm_target *ti, status_type_t status_type,
+		unsigned status_flags, char *result, unsigned maxlen)
+{
+	struct dedup_config *dc = ti->private;
+	uint64_t data_total_block_count;
+	uint64_t data_used_block_count;
+	uint64_t data_free_block_count;
+	uint64_t data_actual_block_count;
+	int sz = 0;
+
+	switch (status_type) {
+	case STATUSTYPE_INFO:
+	case STATUSTYPE_TABLE:
+		data_used_block_count = dc->physical_block_counter;
+		data_actual_block_count = dc->logical_block_counter;
+		data_total_block_count = dc->pblocks;
+
+		data_free_block_count =
+			data_total_block_count - data_used_block_count;
+
+		DMEMIT("%llu %llu %llu %llu ",
+			data_total_block_count, data_free_block_count,
+			data_used_block_count, data_actual_block_count);
+
+		DMEMIT("%u %s %s ", dc->block_size,
+			dc->data_dev->name, dc->metadata_dev->name);
+
+		DMEMIT("%llu %llu %llu %llu %llu %llu",
+			dc->writes, dc->uniqwrites, dc->dupwrites,
+			dc->reads_on_writes, dc->overwrites, dc->newwrites);
+	}
+}
+
 static int mark_lbn_pbn_bitmap(void *key, int32_t ksize,
 		void *value, int32_t vsize, void *data)
 {
@@ -885,6 +918,7 @@ static struct target_type dm_dedup_target = {
 	.map = dm_dedup_map_fn,
 	.end_io = dm_dedup_endio_fn,
 	.message = dm_dedup_message_fn,
+	.status = dm_dedup_status_fn,
 };
 
 static int __init dm_dedup_init(void)
