@@ -14,6 +14,7 @@ dm-thin-pool-y	+= dm-thin.o dm-thin-metadata.o
 dm-cache-y	+= dm-cache-target.o dm-cache-metadata.o dm-cache-policy.o
 dm-cache-mq-y   += dm-cache-policy-mq.o
 dm-cache-cleaner-y += dm-cache-policy-cleaner.o
+dm-dedup-y	+= dm-dedup-target.o dm-dedup-hash.o dm-dedup-rw.o dm-dedup-cbt.o dm-dedup-ram.o
 dm-era-y	+= dm-era-target.o
 md-mod-y	+= md.o bitmap.o
 raid456-y	+= raid5.o
@@ -54,6 +55,7 @@ obj-$(CONFIG_DM_VERITY)		+= dm-verity.o
 obj-$(CONFIG_DM_CACHE)		+= dm-cache.o
 obj-$(CONFIG_DM_CACHE_MQ)	+= dm-cache-mq.o
 obj-$(CONFIG_DM_CACHE_CLEANER)	+= dm-cache-cleaner.o
+obj-$(CONFIG_DM_DEDUP)		+= dm-dedup.o
 obj-$(CONFIG_DM_ERA)		+= dm-era.o
 
 ifeq ($(CONFIG_DM_UEVENT),y)
