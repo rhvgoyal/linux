@@ -684,7 +684,10 @@ static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 	dc->flushrq = flushrq;
 	dc->writes_after_flush = 0;
 
-	dm_set_target_max_io_len(ti, dc->sectors_per_block);
+	r = dm_set_target_max_io_len(ti, dc->sectors_per_block);
+	if (r)
+		goto bad_kvstore_init;
+
 	ti->private = dc;
 
 	da->meta_dev = da->data_dev = NULL;
