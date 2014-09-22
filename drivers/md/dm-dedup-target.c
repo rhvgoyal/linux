@@ -10,6 +10,8 @@
  * This file is released under the GPL.
  */
 
+#include <linux/vmalloc.h>
+
 #include "dm-dedup-target.h"
 #include "dm-dedup-rw.h"
 #include "dm-dedup-hash.h"

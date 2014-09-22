@@ -10,6 +10,7 @@
  * This file is released under the GPL.
  */
 
+#include <linux/vmalloc.h>
 #include <linux/errno.h>
 
 #include "dm-dedup-kvstore.h"
