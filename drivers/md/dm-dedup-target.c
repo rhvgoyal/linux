@@ -109,7 +109,7 @@ static int allocate_block(struct dedup_config *dc, uint64_t *pbn_new)
 }
 
 static int write_to_new_block(struct dedup_config *dc, uint64_t *pbn_new,
-				struct bio *bio, uint64_t lbn)
+			      struct bio *bio, uint64_t lbn)
 {
 	int r = 0;
 	struct lbn_pbn_value lbnpbn_value;
@@ -133,7 +133,7 @@ static int write_to_new_block(struct dedup_config *dc, uint64_t *pbn_new,
 }
 
 static int handle_write_no_hash(struct dedup_config *dc,
-			struct bio *bio, uint64_t lbn, u8 *hash)
+				struct bio *bio, uint64_t lbn, u8 *hash)
 {
 	int r;
 	uint32_t vsize;
@@ -197,8 +197,8 @@ out:
 }
 
 static int handle_write_with_hash(struct dedup_config *dc, struct bio *bio,
-				uint64_t lbn, u8 *final_hash,
-				struct hash_pbn_value hashpbn_value)
+				  uint64_t lbn, u8 *final_hash,
+				  struct hash_pbn_value hashpbn_value)
 {
 	int r;
 	uint32_t vsize;
@@ -379,7 +379,7 @@ struct dedup_args {
 };
 
 static int parse_meta_dev(struct dedup_args *da, struct dm_arg_set *as,
-				char **err)
+			  char **err)
 {
 	int r;
 
@@ -392,7 +392,7 @@ static int parse_meta_dev(struct dedup_args *da, struct dm_arg_set *as,
 }
 
 static int parse_data_dev(struct dedup_args *da, struct dm_arg_set *as,
-				char **err)
+			  char **err)
 {
 	int r;
 
@@ -407,7 +407,7 @@ static int parse_data_dev(struct dedup_args *da, struct dm_arg_set *as,
 }
 
 static int parse_block_size(struct dedup_args *da, struct dm_arg_set *as,
-				char **err)
+			    char **err)
 {
 	uint32_t block_size;
 
@@ -431,7 +431,7 @@ static int parse_block_size(struct dedup_args *da, struct dm_arg_set *as,
 }
 
 static int parse_hash_algo(struct dedup_args *da, struct dm_arg_set *as,
-				char **err)
+			   char **err)
 {
 	strlcpy(da->hash_algo, dm_shift_arg(as), CRYPTO_ALG_NAME_LEN);
 
@@ -444,7 +444,7 @@ static int parse_hash_algo(struct dedup_args *da, struct dm_arg_set *as,
 }
 
 static int parse_backend(struct dedup_args *da, struct dm_arg_set *as,
-				char **err)
+			 char **err)
 {
 	char backend[MAX_BACKEND_NAME_LEN];
 
@@ -463,7 +463,7 @@ static int parse_backend(struct dedup_args *da, struct dm_arg_set *as,
 }
 
 static int parse_flushrq(struct dedup_args *da, struct dm_arg_set *as,
-				char **err)
+			 char **err)
 {
 	if (kstrtou32(dm_shift_arg(as), 10, &da->flushrq))
 		return -EINVAL;
@@ -472,7 +472,7 @@ static int parse_flushrq(struct dedup_args *da, struct dm_arg_set *as,
 }
 
 static int parse_dedup_args(struct dedup_args *da, int argc,
-				char **argv, char **err)
+			    char **argv, char **err)
 {
 	struct dm_arg_set as;
 	int r;
@@ -524,13 +524,11 @@ static void destroy_dedup_args(struct dedup_args *da)
 
 	if (da->data_dev)
 		dm_put_device(da->ti, da->data_dev);
-
-	kfree(da);
 }
 
 static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 {
-	struct dedup_args *da;
+	struct dedup_args da;
 	struct dedup_config *dc;
 	struct workqueue_struct *wq;
 
@@ -552,19 +550,14 @@ static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 
 	bool unformatted;
 
-	da = kzalloc(sizeof(*da), GFP_KERNEL);
-	if (!da) {
-		ti->error = "Error allocating memory for dedup arguments";
-		return -ENOMEM;
-	}
+	memset(&da, 0, sizeof(struct dedup_args));
+	da.ti = ti;
 
-	da->ti = ti;
-
-	r = parse_dedup_args(da, argc, argv, &ti->error);
+	r = parse_dedup_args(&da, argc, argv, &ti->error);
 	if (r)
 		goto out;
 
-	dc = kmalloc(sizeof(*dc), GFP_NOIO);
+	dc = kzalloc(sizeof(*dc), GFP_KERNEL);
 	if (!dc) {
 		ti->error = "Error allocating memory for dedup config";
 		r = -ENOMEM;
@@ -593,23 +586,23 @@ static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_io_client;
 	}
 
-	dc->block_size = da->block_size;
-	dc->sectors_per_block = to_sector(da->block_size);
+	dc->block_size = da.block_size;
+	dc->sectors_per_block = to_sector(da.block_size);
 	dc->lblocks = ti->len / dc->sectors_per_block;
 
-	data_size = i_size_read(da->data_dev->bdev->bd_inode);
-	dc->pblocks = data_size / da->block_size;
+	data_size = i_size_read(da.data_dev->bdev->bd_inode);
+	dc->pblocks = data_size / da.block_size;
 
 	/* Meta-data backend specific part */
-	if (da->backend == BKND_INRAM) {
+	if (da.backend == BKND_INRAM) {
 		dc->mdops = &metadata_ops_inram;
 		iparam_inram.blocks = dc->pblocks;
 		iparam = &iparam_inram;
-	} else if (da->backend == BKND_COWBTREE) {
+	} else if (da.backend == BKND_COWBTREE) {
 		r = -EINVAL;
 		dc->mdops = &metadata_ops_cowbtree;
 		iparam_cowbtree.blocks = dc->pblocks;
-		iparam_cowbtree.metadata_bdev = da->meta_dev->bdev;
+		iparam_cowbtree.metadata_bdev = da.meta_dev->bdev;
 		iparam = &iparam_cowbtree;
 	} else
 		BUG();
@@ -621,7 +614,7 @@ static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_metadata_init;
 	}
 
-	dc->desc_table = desc_table_init(da->hash_algo);
+	dc->desc_table = desc_table_init(da.hash_algo);
 	if (!dc->desc_table || IS_ERR(dc->desc_table)) {
 		ti->error = "failed to initialize crypto API";
 		r = PTR_ERR(dc->desc_table);
@@ -661,8 +654,8 @@ static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 		physical_block_counter = data->physical_block_counter;
 	}
 
-	dc->data_dev = da->data_dev;
-	dc->metadata_dev = da->meta_dev;
+	dc->data_dev = da.data_dev;
+	dc->metadata_dev = da.meta_dev;
 
 	dc->workqueue = wq;
 	dc->dedup_work_pool = dedup_work_pool;
@@ -678,7 +671,7 @@ static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 	dc->overwrites = 0;
 	dc->newwrites = 0;
 
-	strcpy(dc->crypto_alg, da->hash_algo);
+	strcpy(dc->crypto_alg, da.hash_algo);
 	dc->crypto_key_size = crypto_key_size;
 
 	dc->flushrq = flushrq;
@@ -690,9 +683,7 @@ static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
 
 	ti->private = dc;
 
-	da->meta_dev = da->data_dev = NULL;
-	r = 0;
-	goto out;
+	return 0;
 
 bad_kvstore_init:
 	desc_table_deinit(dc->desc_table);
@@ -707,7 +698,7 @@ bad_mempool:
 bad_wq:
 	kfree(dc);
 out:
-	destroy_dedup_args(da);
+	destroy_dedup_args(&da);
 	return r;
 }
 
@@ -748,7 +739,7 @@ static void dm_dedup_dtr_fn(struct dm_target *ti)
 }
 
 static void dm_dedup_status_fn(struct dm_target *ti, status_type_t status_type,
-		unsigned status_flags, char *result, unsigned maxlen)
+			       unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct dedup_config *dc = ti->private;
 	uint64_t data_total_block_count;
@@ -781,7 +772,7 @@ static void dm_dedup_status_fn(struct dm_target *ti, status_type_t status_type,
 }
 
 static int mark_lbn_pbn_bitmap(void *key, int32_t ksize,
-		void *value, int32_t vsize, void *data)
+			       void *value, int32_t vsize, void *data)
 {
 	int ret = 0;
 	struct mark_and_sweep_data *ms_data =
@@ -798,7 +789,7 @@ static int mark_lbn_pbn_bitmap(void *key, int32_t ksize,
 }
 
 static int cleanup_hash_pbn(void *key, int32_t ksize, void *value,
-		int32_t vsize, void *data)
+			    int32_t vsize, void *data)
 {
 	int ret = 0, r = 0;
 	uint64_t pbn_val = 0;
@@ -882,7 +873,7 @@ out:
 }
 
 static int dm_dedup_message_fn(struct dm_target *ti,
-				unsigned argc, char **argv)
+			       unsigned argc, char **argv)
 {
 	int r = 0;
 
@@ -929,12 +920,10 @@ static int __init dm_dedup_init(void)
 	int r;
 
 	r = dm_register_target(&dm_dedup_target);
-	if (r < 0)
-		DMERR("target registration failed: %d.", r);
-	else
-		DMINFO("target registered succesfully.");
+	if (r)
+		return r;
 
-	return r;
+	return 0;
 }
 
 static void __exit dm_dedup_exit(void)
