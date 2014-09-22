@@ -78,7 +78,7 @@ static int __begin_transaction(struct metadata *md)
 	struct dm_block *sblock;
 
 	r = dm_bm_read_lock(md->meta_bm, METADATA_SUPERBLOCK_LOCATION,
-					NULL, &sblock);
+			    NULL, &sblock);
 	if (r)
 		return r;
 
@@ -121,7 +121,7 @@ static int __commit_transaction(struct metadata *md)
 		goto out;
 
 	r = dm_bm_write_lock(md->meta_bm, METADATA_SUPERBLOCK_LOCATION,
-				NULL, &sblock);
+			     NULL, &sblock);
 	if (r)
 		goto out;
 
@@ -177,19 +177,19 @@ static int write_initial_superblock(struct metadata *md)
 		return r;
 
 	r = dm_bm_write_lock_zero(md->meta_bm, METADATA_SUPERBLOCK_LOCATION,
-							NULL, &sblock);
+				  NULL, &sblock);
 	if (r < 0)
 		return r;
 
 	disk_super = dm_block_data(sblock);
 
 	r = dm_sm_copy_root(md->meta_sm, &disk_super->metadata_space_map_root,
-							meta_len);
+			    meta_len);
 	if (r < 0)
 		goto bad_locked;
 
 	r = dm_sm_copy_root(md->data_sm, &disk_super->data_space_map_root,
-							data_len);
+			    data_len);
 	if (r < 0)
 		goto bad_locked;
 
@@ -245,7 +245,7 @@ static struct metadata *init_meta_cowbtree(void *input_param, bool *unformatted)
 		return ERR_PTR(-ENOMEM);
 
 	meta_bm = dm_block_manager_create(p->metadata_bdev, METADATA_BSIZE,
-				METADATA_CACHESIZE, METADATA_MAXLOCKS);
+					  METADATA_CACHESIZE, METADATA_MAXLOCKS);
 	if (IS_ERR(meta_bm)) {
 		md = (struct metadata *)meta_bm;
 		goto badbm;
@@ -264,7 +264,7 @@ static struct metadata *init_meta_cowbtree(void *input_param, bool *unformatted)
 		md->meta_bm = meta_bm;
 
 		ret = dm_bm_read_lock(meta_bm, METADATA_SUPERBLOCK_LOCATION,
-					NULL, &sblock);
+				      NULL, &sblock);
 		if (ret < 0) {
 			DMERR("could not read_lock superblock");
 			/* XXX: handle error */
@@ -273,18 +273,17 @@ static struct metadata *init_meta_cowbtree(void *input_param, bool *unformatted)
 		disk_super = dm_block_data(sblock);
 
 		ret = dm_tm_open_with_sm(meta_bm, METADATA_SUPERBLOCK_LOCATION,
-				disk_super->metadata_space_map_root,
-				sizeof(disk_super->metadata_space_map_root),
-				&md->tm, &md->meta_sm);
+					 disk_super->metadata_space_map_root,
+					 sizeof(disk_super->metadata_space_map_root),
+					 &md->tm, &md->meta_sm);
 		if (ret < 0) {
 			DMERR("could not open_with_sm superblock");
 			/* XXX: handle error */
 		}
 
 
-		md->data_sm = dm_sm_disk_open(md->tm,
-				disk_super->data_space_map_root,
-				sizeof(disk_super->data_space_map_root));
+		md->data_sm = dm_sm_disk_open(md->tm, disk_super->data_space_map_root,
+					      sizeof(disk_super->data_space_map_root));
 		if (IS_ERR(md->data_sm)) {
 			DMERR("dm_disk_open failed");
 			/*XXX: handle error */
@@ -296,7 +295,7 @@ static struct metadata *init_meta_cowbtree(void *input_param, bool *unformatted)
 	}
 
 	ret = dm_tm_create_with_sm(meta_bm, METADATA_SUPERBLOCK_LOCATION,
-						&tm, &meta_sm);
+				   &tm, &meta_sm);
 	if (ret < 0) {
 		md = ERR_PTR(ret);
 		goto badtm;
@@ -413,7 +412,7 @@ static int get_refcount_cowbtree(struct metadata *md, uint64_t blockn)
  *********************************************************/
 
 static int kvs_delete_linear_cowbtree(struct kvstore *kvs,
-					void *key, int32_t ksize)
+				      void *key, int32_t ksize)
 {
 	int r;
 	struct kvstore_cbt *kvcbt = NULL;
@@ -439,7 +438,7 @@ static int kvs_delete_linear_cowbtree(struct kvstore *kvs,
  * < 0 - error on lookup
  */
 static int kvs_lookup_linear_cowbtree(struct kvstore *kvs, void *key,
-			int32_t ksize, void *value, int32_t *vsize)
+				      int32_t ksize, void *value, int32_t *vsize)
 {
 	int r;
 	struct kvstore_cbt *kvcbt = NULL;
@@ -460,8 +459,8 @@ static int kvs_lookup_linear_cowbtree(struct kvstore *kvs, void *key,
 }
 
 static int kvs_insert_linear_cowbtree(struct kvstore *kvs, void *key,
-				int32_t ksize, void *value,
-				int32_t vsize)
+				      int32_t ksize, void *value,
+				      int32_t vsize)
 {
 	int inserted;
 	struct kvstore_cbt *kvcbt = NULL;
@@ -475,11 +474,11 @@ static int kvs_insert_linear_cowbtree(struct kvstore *kvs, void *key,
 		return -EINVAL;
 
 	return dm_btree_insert_notify(&(kvcbt->info), kvcbt->root, key,
-					value, &(kvcbt->root), &inserted);
+				      value, &(kvcbt->root), &inserted);
 
 }
 
-static struct kvstore *kvs_create_linear_cowbtree(struct metadata *md,
+static struct kvstore * kvs_create_linear_cowbtree(struct metadata *md,
 			uint32_t ksize, uint32_t vsize, uint32_t kmax,
 			bool unformatted)
 {
@@ -550,7 +549,7 @@ badtree:
  ********************************************************/
 
 static int kvs_delete_sparse_cowbtree(struct kvstore *kvs,
-					void *key, int32_t ksize)
+				      void *key, int32_t ksize)
 {
 	char *entry;
 	uint64_t key_val;
@@ -594,7 +593,7 @@ repeat:
  * < 0 - error on lookup
  */
 static int kvs_lookup_sparse_cowbtree(struct kvstore *kvs, void *key,
-			int32_t ksize, void *value, int32_t *vsize)
+				      int32_t ksize, void *value, int32_t *vsize)
 {
 	char *entry;
 	uint64_t key_val;
@@ -633,8 +632,8 @@ repeat:
 }
 
 static int kvs_insert_sparse_cowbtree(struct kvstore *kvs, void *key,
-				int32_t ksize, void *value,
-				int32_t vsize)
+				      int32_t ksize, void *value,
+				      int32_t vsize)
 {
 	char *entry;
 	uint64_t key_val;
@@ -663,7 +662,7 @@ repeat:
 		memcpy(entry, key, ksize);
 		memcpy(entry + ksize, value, vsize);
 		r = dm_btree_insert(&(kvcbt->info), kvcbt->root, &key_val,
-					entry, &(kvcbt->root));
+				    entry, &(kvcbt->root));
 		kfree(entry);
 		return r;
 	} else if (r >= 0) {
