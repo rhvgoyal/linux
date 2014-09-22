@@ -16,20 +16,20 @@
 
 #define DMD_IO_SIZE	4096
 
-static uint64_t compute_sector(struct bio *bio,
+static sector_t compute_sector(struct bio *bio,
 			       struct dedup_config *dc)
 {
-	uint64_t to_be_lbn;
+	sector_t to_be_lbn;
 
 	to_be_lbn = bio->bi_iter.bi_sector;
-	to_be_lbn /= dc->sectors_per_block;
+	(void) sector_div(to_be_lbn, dc->sectors_per_block);
 	to_be_lbn *= dc->sectors_per_block;
 
 	return to_be_lbn;
 }
 
 static int fetch_whole_block(struct dedup_config *dc,
-			uint64_t pbn, struct page_list *pl)
+			     uint64_t pbn, struct page_list *pl)
 {
 	struct dm_io_request iorq;
 	struct dm_io_region where;
@@ -50,13 +50,14 @@ static int fetch_whole_block(struct dedup_config *dc,
 }
 
 static int merge_data(struct dedup_config *dc, struct page *page,
-				struct bio *bio)
+		      struct bio *bio)
 {
+	sector_t bi_sector = bio->bi_iter.bi_sector;
 	void *src_page_vaddr, *dest_page_vaddr;
 	int position, err = 0;
 
 	/* Relative offset in terms of sector size */
-	position = (bio->bi_iter.bi_sector % dc->sectors_per_block);
+	position = sector_div(bi_sector, dc->sectors_per_block);
 
 	if (!page || !bio->bi_io_vec->bv_page) {
 		err = -EINVAL;
@@ -224,23 +225,22 @@ out:
 struct bio *prepare_bio_on_write(struct dedup_config *dc, struct bio *bio)
 {
 	int r;
-	uint64_t lbn_sector;
-	uint64_t lbn;
+	sector_t lbn;
 	uint32_t vsize;
 	struct lbn_pbn_value lbnpbn_value;
 	struct bio *clone;
 
-	lbn_sector = compute_sector(bio, dc);
-	lbn = lbn_sector / dc->sectors_per_block;
+	lbn = compute_sector(bio, dc);
+	(void) sector_div(lbn, dc->sectors_per_block);
 
 	/* check for old or new lbn and fetch the appropriate pbn */
 	r = dc->kvs_lbn_pbn->kvs_lookup(dc->kvs_lbn_pbn, (void *)&lbn,
-			sizeof(lbn), (void *)&lbnpbn_value, &vsize);
+					sizeof(lbn), (void *)&lbnpbn_value, &vsize);
 	if (r == 0)
 		clone = prepare_bio_without_pbn(dc, bio);
 	else if (r == 1)
-		clone = prepare_bio_with_pbn(dc, bio, lbnpbn_value.pbn
-						* dc->sectors_per_block);
+		clone = prepare_bio_with_pbn(dc, bio,
+					     lbnpbn_value.pbn * dc->sectors_per_block);
 	else
 		BUG();
 

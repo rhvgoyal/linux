@@ -61,15 +61,18 @@ static void bio_zero_endio(struct bio *bio)
 
 static uint64_t bio_lbn(struct dedup_config *dc, struct bio *bio)
 {
-	return bio->bi_iter.bi_sector / dc->sectors_per_block;
+	sector_t lbn = bio->bi_iter.bi_sector;
+
+	sector_div(lbn, dc->sectors_per_block);
+
+	return lbn;
 }
 
-static void do_io(struct dedup_config *dc, struct bio *bio,
-			uint64_t pbn)
+static void do_io(struct dedup_config *dc, struct bio *bio, uint64_t pbn)
 {
 	int offset;
 
-	offset = (sector_t) bio->bi_iter.bi_sector % dc->sectors_per_block;
+	offset = sector_div(bio->bi_iter.bi_sector, dc->sectors_per_block);
 	bio->bi_iter.bi_sector = (sector_t)pbn * dc->sectors_per_block + offset;
 
 	bio->bi_bdev = dc->data_dev->bdev;
@@ -539,7 +542,7 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	void *iparam;
 	struct metadata *md = NULL;
 
-	uint64_t data_size;
+	sector_t data_size;
 	int r;
 	int crypto_key_size;
 
@@ -590,10 +593,13 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	dc->block_size = da.block_size;
 	dc->sectors_per_block = to_sector(da.block_size);
-	dc->lblocks = ti->len / dc->sectors_per_block;
+	data_size = ti->len;
+	(void) sector_div(data_size, dc->sectors_per_block);
+	dc->lblocks = data_size;
 
-	data_size = i_size_read(da.data_dev->bdev->bd_inode);
-	dc->pblocks = data_size / da.block_size;
+	data_size = i_size_read(da.data_dev->bdev->bd_inode) >> SECTOR_SHIFT;
+	(void) sector_div(data_size, dc->sectors_per_block);
+	dc->pblocks = data_size;
 
 	/* Meta-data backend specific part */
 	if (da.backend == BKND_INRAM) {
@@ -830,14 +836,15 @@ static int cleanup_hash_pbn(void *key, int32_t ksize, void *value,
 static int mark_and_sweep(struct dedup_config *dc)
 {
 	int err = 0;
-	uint64_t data_size = 0;
+	sector_t data_size = 0;
 	uint64_t bitmap_size = 0;
 	struct mark_and_sweep_data ms_data;
 
 	BUG_ON(!dc);
 
-	data_size = i_size_read(dc->data_dev->bdev->bd_inode);
-	bitmap_size = data_size / dc->block_size;
+	data_size = i_size_read(dc->data_dev->bdev->bd_inode) >> SECTOR_SHIFT;
+	(void) sector_div(data_size, dc->sectors_per_block);
+	bitmap_size = data_size;
 
 	memset(&ms_data, 0, sizeof(struct mark_and_sweep_data));
 
