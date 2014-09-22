@@ -354,7 +354,7 @@ static void dedup_defer_bio(struct dedup_config *dc, struct bio *bio)
 	queue_work(dc->workqueue, &(data->worker));
 }
 
-static int dm_dedup_map_fn(struct dm_target *ti, struct bio *bio)
+static int dm_dedup_map(struct dm_target *ti, struct bio *bio)
 {
 	dedup_defer_bio(ti->private, bio);
 
@@ -526,7 +526,7 @@ static void destroy_dedup_args(struct dedup_args *da)
 		dm_put_device(da->ti, da->data_dev);
 }
 
-static int dm_dedup_ctr_fn(struct dm_target *ti, unsigned int argc, char **argv)
+static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	struct dedup_args da;
 	struct dedup_config *dc;
@@ -702,7 +702,7 @@ out:
 	return r;
 }
 
-static void dm_dedup_dtr_fn(struct dm_target *ti)
+static void dm_dedup_dtr(struct dm_target *ti)
 {
 	struct dedup_config *dc = ti->private;
 	struct on_disk_stats data;
@@ -738,8 +738,8 @@ static void dm_dedup_dtr_fn(struct dm_target *ti)
 	kfree(dc);
 }
 
-static void dm_dedup_status_fn(struct dm_target *ti, status_type_t status_type,
-			       unsigned status_flags, char *result, unsigned maxlen)
+static void dm_dedup_status(struct dm_target *ti, status_type_t status_type,
+			    unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct dedup_config *dc = ti->private;
 	uint64_t data_total_block_count;
@@ -872,8 +872,8 @@ out:
 	return err;
 }
 
-static int dm_dedup_message_fn(struct dm_target *ti,
-			       unsigned argc, char **argv)
+static int dm_dedup_message(struct dm_target *ti,
+			    unsigned argc, char **argv)
 {
 	int r = 0;
 
@@ -894,7 +894,7 @@ static int dm_dedup_message_fn(struct dm_target *ti,
 	return r;
 }
 
-static int dm_dedup_endio_fn(struct dm_target *ti, struct bio *bio, int error)
+static int dm_dedup_endio(struct dm_target *ti, struct bio *bio, int error)
 {
 	if (error || bio_data_dir(bio) != READ)
 		return 0;
@@ -906,13 +906,12 @@ static struct target_type dm_dedup_target = {
 	.name = "dedup",
 	.version = {1, 0, 0},
 	.module = THIS_MODULE,
-	.features = 0x0,
-	.ctr = dm_dedup_ctr_fn,
-	.dtr = dm_dedup_dtr_fn,
-	.map = dm_dedup_map_fn,
-	.end_io = dm_dedup_endio_fn,
-	.message = dm_dedup_message_fn,
-	.status = dm_dedup_status_fn,
+	.ctr = dm_dedup_ctr,
+	.dtr = dm_dedup_dtr,
+	.map = dm_dedup_map,
+	.end_io = dm_dedup_endio,
+	.message = dm_dedup_message,
+	.status = dm_dedup_status,
 };
 
 static int __init dm_dedup_init(void)
