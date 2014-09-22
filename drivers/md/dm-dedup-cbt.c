@@ -473,6 +473,7 @@ static int kvs_insert_linear_cowbtree(struct kvstore *kvs, void *key,
 	if (vsize != kvs->vsize)
 		return -EINVAL;
 
+	__dm_bless_for_disk(value);
 	return dm_btree_insert_notify(&(kvcbt->info), kvcbt->root, key,
 				      value, &(kvcbt->root), &inserted);
 
@@ -661,6 +662,7 @@ repeat:
 	if (r == -ENODATA) {
 		memcpy(entry, key, ksize);
 		memcpy(entry + ksize, value, vsize);
+		__dm_bless_for_disk(&key_val);
 		r = dm_btree_insert(&(kvcbt->info), kvcbt->root, &key_val,
 				    entry, &(kvcbt->root));
 		kfree(entry);
