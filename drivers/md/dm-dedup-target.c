@@ -41,13 +41,6 @@ struct dedup_work {
 	struct bio *bio;
 };
 
-struct mark_and_sweep_data {
-	unsigned long *bitmap;
-	uint64_t bitmap_len;
-	uint64_t cleanup_count; /* number of hashes cleaned up */
-	struct dedup_config *dc;
-};
-
 enum backend {
 	BKND_INRAM,
 	BKND_COWBTREE
@@ -842,106 +835,51 @@ static void dm_dedup_status(struct dm_target *ti, status_type_t status_type,
 	}
 }
 
-static int mark_lbn_pbn_bitmap(void *key, int32_t ksize,
-			       void *value, int32_t vsize, void *data)
-{
-	int ret = 0;
-	struct mark_and_sweep_data *ms_data =
-		(struct mark_and_sweep_data *)data;
-	uint64_t pbn_val = *((uint64_t *)value);
-
-	BUG_ON(!data);
-	BUG_ON(!ms_data->bitmap);
-	BUG_ON(pbn_val > ms_data->bitmap_len);
-
-	bitmap_set(ms_data->bitmap, pbn_val, 1);
-
-	return ret;
-}
-
 static int cleanup_hash_pbn(void *key, int32_t ksize, void *value,
 			    int32_t vsize, void *data)
 {
 	int r = 0;
 	uint64_t pbn_val = 0;
-	struct mark_and_sweep_data *ms_data =
-		(struct mark_and_sweep_data *)data;
 	struct hash_pbn_value hashpbn_value = *((struct hash_pbn_value *)value);
-	struct dedup_config *dc = ms_data->dc;
+	struct dedup_config *dc = (struct dedup_config *)data;
 
 	BUG_ON(!data);
-	BUG_ON(!ms_data->bitmap);
 
 	pbn_val = hashpbn_value.pbn;
-	BUG_ON(pbn_val > ms_data->bitmap_len);
 
-	if (test_bit(pbn_val, ms_data->bitmap) == 0) {
+	if (dc->mdops->get_refcount(dc->bmd, pbn_val) == 1) {
 		r = dc->kvs_hash_pbn->kvs_delete(dc->kvs_hash_pbn,
 							key, ksize);
 		if (r < 0)
 			goto out;
 
-		r = dc->mdops->dec_refcount(ms_data->dc->bmd, pbn_val);
+		r = dc->mdops->dec_refcount(dc->bmd, pbn_val);
 		if (r < 0)
-			goto out;
+			goto out_dec_refcount;
 
-		ms_data->cleanup_count++;
+		dc->physical_block_counter -= 1;
 	}
 
+	goto out;
+
+out_dec_refcount:
+	dc->kvs_hash_pbn->kvs_insert(dc->kvs_hash_pbn, key,
+			ksize, (void *)&hashpbn_value,
+			sizeof(hashpbn_value));
 out:
 	return r;
 }
 
-/*
- * Creates a bitmap of all PBNs in use by walking through
- * kvs_lbn_pbn. Then walks through kvs_hash_pbn and deletes
- * any entries which do not have an lbn-to-pbn mapping.
- */
-static int mark_and_sweep(struct dedup_config *dc)
+static int garbage_collect(struct dedup_config *dc)
 {
 	int err = 0;
-	sector_t data_size = 0;
-	uint64_t bitmap_size = 0;
-	struct mark_and_sweep_data ms_data;
 
 	BUG_ON(!dc);
 
-	data_size = i_size_read(dc->data_dev->bdev->bd_inode) >> SECTOR_SHIFT;
-	(void) sector_div(data_size, dc->sectors_per_block);
-	bitmap_size = data_size;
-
-	memset(&ms_data, 0, sizeof(struct mark_and_sweep_data));
-
-	ms_data.bitmap = vmalloc(BITS_TO_LONGS(bitmap_size) *
-			sizeof(unsigned long));
-	if (!ms_data.bitmap) {
-		DMERR("Could not vmalloc ms_data.bitmap");
-		err = -ENOMEM;
-		goto out;
-	}
-	bitmap_zero(ms_data.bitmap, bitmap_size);
-
-	ms_data.bitmap_len = bitmap_size;
-	ms_data.cleanup_count = 0;
-	ms_data.dc = dc;
-
-	/* Create bitmap of used pbn blocks */
-	err = dc->kvs_lbn_pbn->kvs_iterate(dc->kvs_lbn_pbn,
-			&mark_lbn_pbn_bitmap, (void *)&ms_data);
-	if (err < 0)
-		goto out_free;
-
-	/* Cleanup hashes based on above bitmap of used pbn blocks */
+	/* Cleanup hashes if the refcount of block == 1 */
 	err = dc->kvs_hash_pbn->kvs_iterate(dc->kvs_hash_pbn,
-			&cleanup_hash_pbn, (void *)&ms_data);
-	if (err < 0)
-		goto out_free;
+			&cleanup_hash_pbn, (void *)dc);
 
-	dc->physical_block_counter -= ms_data.cleanup_count;
-
-out_free:
-	vfree(ms_data.bitmap);
-out:
 	return err;
 }
 
@@ -952,10 +890,10 @@ static int dm_dedup_message(struct dm_target *ti,
 
 	struct dedup_config *dc = ti->private;
 
-	if (!strcasecmp(argv[0], "mark_and_sweep")) {
-		r = mark_and_sweep(dc);
+	if (!strcasecmp(argv[0], "garbage_collect")) {
+		r = garbage_collect(dc);
 		if (r < 0)
-			DMERR("Error in performing mark_and_sweep: %d.", r);
+			DMERR("Error in performing garbage_collect: %d.", r);
 	} else if (!strcasecmp(argv[0], "drop_bufio_cache")) {
 		if (dc->mdops->flush_bufio_cache)
 			dc->mdops->flush_bufio_cache(dc->bmd);
