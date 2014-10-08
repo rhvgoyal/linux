@@ -80,7 +80,7 @@ static void do_io(struct dedup_config *dc, struct bio *bio, uint64_t pbn)
 	generic_make_request(bio);
 }
 
-static void handle_read(struct dedup_config *dc, struct bio *bio)
+static int handle_read(struct dedup_config *dc, struct bio *bio)
 {
 	uint64_t lbn;
 	uint32_t vsize;
@@ -96,7 +96,9 @@ static void handle_read(struct dedup_config *dc, struct bio *bio)
 	else if (r == 1)
 		do_io(dc, bio, lbnpbn_value.pbn);
 	else
-		BUG();
+		return r;
+
+	return 0;
 }
 
 static int allocate_block(struct dedup_config *dc, uint64_t *pbn_new)
@@ -132,7 +134,7 @@ static int write_to_new_block(struct dedup_config *dc, uint64_t *pbn_new,
 	r = dc->kvs_lbn_pbn->kvs_insert(dc->kvs_lbn_pbn, (void *)&lbn,
 		sizeof(lbn), (void *)&lbnpbn_value, sizeof(lbnpbn_value));
 	if (r < 0)
-		BUG();
+		dc->mdops->dec_refcount(dc->bmd, *pbn_new);
 
 	return r;
 }
@@ -155,7 +157,7 @@ static int handle_write_no_hash(struct dedup_config *dc,
 		dc->newwrites++;
 		r = write_to_new_block(dc, &pbn_new, bio, lbn);
 		if (r < 0)
-			goto out;
+			goto out_write_new_block_1;
 
 		hashpbn_value.pbn = pbn_new;
 
@@ -163,26 +165,40 @@ static int handle_write_no_hash(struct dedup_config *dc,
 				dc->crypto_key_size, (void *)&hashpbn_value,
 				sizeof(hashpbn_value));
 		if (r < 0)
-			BUG();
+			goto out_kvs_insert_1;
 
 		r = dc->mdops->inc_refcount(dc->bmd, pbn_new);
 		if (r < 0)
-			BUG();
+			goto out_inc_refcount_1;
 
-		goto out;
+		goto out_1;
+
+out_inc_refcount_1:
+		dc->kvs_hash_pbn->kvs_delete(dc->kvs_hash_pbn,
+				(void *)hash, dc->crypto_key_size);
+out_kvs_insert_1:
+		dc->kvs_lbn_pbn->kvs_delete(dc->kvs_lbn_pbn,
+				(void *)&lbn, sizeof(lbn));
+		dc->mdops->dec_refcount(dc->bmd, pbn_new);
+out_write_new_block_1:
+		dc->newwrites--;
+out_1:
+		if (r < 0)
+			dc->uniqwrites--;
+		return r;
 	} else if (r < 0)
-		BUG();
+		goto out_2;
 
 	/* LBN->PBN mappings exist */
 	dc->overwrites++;
 	r = write_to_new_block(dc, &pbn_new, bio, lbn);
 	if (r < 0)
-		goto out;
+		goto out_write_new_block_2;
 
 	pbn_old = lbnpbn_value.pbn;
 	r = dc->mdops->dec_refcount(dc->bmd, pbn_old);
 	if (r < 0)
-		BUG();
+		goto out_dec_refcount_2;
 
 	dc->logical_block_counter--;
 
@@ -192,12 +208,30 @@ static int handle_write_no_hash(struct dedup_config *dc,
 				dc->crypto_key_size, (void *)&hashpbn_value,
 				sizeof(hashpbn_value));
 	if (r < 0)
-		BUG();
+		goto out_kvs_insert_2;
 
 	r = dc->mdops->inc_refcount(dc->bmd, pbn_new);
 	if (r < 0)
-		BUG();
-out:
+		goto out_inc_refcount_2;
+
+	goto out_2;
+
+out_inc_refcount_2:
+	dc->kvs_hash_pbn->kvs_delete(dc->kvs_hash_pbn,
+			(void *)hash, dc->crypto_key_size);
+out_kvs_insert_2:
+	dc->logical_block_counter++;
+	dc->mdops->inc_refcount(dc->bmd, pbn_old);
+out_dec_refcount_2:
+	dc->kvs_lbn_pbn->kvs_insert(dc->kvs_lbn_pbn, (void *)&lbn,
+			sizeof(lbn), (void *)&lbnpbn_value,
+			sizeof(lbnpbn_value));
+	dc->mdops->dec_refcount(dc->bmd, pbn_new);
+out_write_new_block_2:
+	dc->overwrites--;
+out_2:
+	if (r < 0)
+		dc->uniqwrites--;
 	return r;
 }
 
@@ -222,7 +256,7 @@ static int handle_write_with_hash(struct dedup_config *dc, struct bio *bio,
 
 		r = dc->mdops->inc_refcount(dc->bmd, pbn_new);
 		if (r < 0)
-			BUG();
+			goto out_inc_refcount_1;
 
 		lbnpbn_value.pbn = pbn_new;
 
@@ -230,13 +264,24 @@ static int handle_write_with_hash(struct dedup_config *dc, struct bio *bio,
 				sizeof(lbn), (void *)&lbnpbn_value,
 				sizeof(lbnpbn_value));
 		if (r < 0)
-			BUG();
+			goto out_kvs_insert_1;
 
 		dc->logical_block_counter++;
 
-		goto out;
+		goto out_1;
+
+out_kvs_insert_1:
+		dc->mdops->dec_refcount(dc->bmd, pbn_new);
+out_inc_refcount_1:
+		dc->newwrites--;
+out_1:
+		if (r >= 0)
+			bio_endio(bio, 0);
+		else
+			dc->dupwrites--;
+		return r;
 	} else if (r < 0)
-		BUG();
+		goto out_2;
 
 	/* LBN->PBN mapping entry exists */
 	dc->overwrites++;
@@ -244,7 +289,7 @@ static int handle_write_with_hash(struct dedup_config *dc, struct bio *bio,
 	if (pbn_new != pbn_old) {
 		r = dc->mdops->inc_refcount(dc->bmd, pbn_new);
 		if (r < 0)
-			BUG();
+			goto out_inc_refcount_2;
 
 		new_lbnpbn_value.pbn = pbn_new;
 
@@ -252,23 +297,33 @@ static int handle_write_with_hash(struct dedup_config *dc, struct bio *bio,
 			sizeof(lbn), (void *)&new_lbnpbn_value,
 			sizeof(new_lbnpbn_value));
 		if (r < 0)
-			BUG();
+			goto out_kvs_insert_2;
 
 		r = dc->mdops->dec_refcount(dc->bmd, pbn_old);
 		if (r < 0)
-			BUG();
-
-		goto out;
+			goto out_dec_refcount_2;
 	}
 
 	/* Nothing to do if writing same data to same LBN */
+	goto out_2;
 
-out:
-	bio_endio(bio, 0);
+out_dec_refcount_2:
+	dc->kvs_lbn_pbn->kvs_insert(dc->kvs_lbn_pbn, (void *)&lbn,
+			sizeof(lbn), (void *)&lbnpbn_value,
+			sizeof(lbnpbn_value));
+out_kvs_insert_2:
+	dc->mdops->dec_refcount(dc->bmd, pbn_new);
+out_inc_refcount_2:
+	dc->overwrites--;
+out_2:
+	if (r >= 0)
+		bio_endio(bio, 0);
+	else
+		dc->dupwrites--;
 	return r;
 }
 
-static void handle_write(struct dedup_config *dc, struct bio *bio)
+static int handle_write(struct dedup_config *dc, struct bio *bio)
 {
 	uint64_t lbn;
 	u8 hash[MAX_DIGEST_SIZE];
@@ -283,10 +338,8 @@ static void handle_write(struct dedup_config *dc, struct bio *bio)
 	if (bio->bi_iter.bi_size < dc->block_size) {
 		dc->reads_on_writes++;
 		new_bio = prepare_bio_on_write(dc, bio);
-		if (!new_bio) {
-			bio_endio(bio, -ENOMEM);
-			return;
-		}
+		if (!new_bio || IS_ERR(new_bio))
+			return -ENOMEM;
 		bio = new_bio;
 	}
 
@@ -294,7 +347,7 @@ static void handle_write(struct dedup_config *dc, struct bio *bio)
 
 	r = compute_hash_bio(dc->desc_table, bio, hash);
 	if (r)
-		BUG();
+		return r;
 
 	r = dc->kvs_hash_pbn->kvs_lookup(dc->kvs_hash_pbn, hash,
 				dc->crypto_key_size, &hashpbn_value, &vsize);
@@ -304,30 +357,36 @@ static void handle_write(struct dedup_config *dc, struct bio *bio)
 	else if (r > 0)
 		r = handle_write_with_hash(dc, bio, lbn, hash,
 					hashpbn_value);
-	else
-		BUG();
+
+	if (r < 0)
+		return r;
 
 	dc->writes_after_flush++;
 	if ((dc->flushrq && dc->writes_after_flush >= dc->flushrq) ||
 			(bio->bi_rw & (REQ_FLUSH | REQ_FUA))) {
 		r = dc->mdops->flush_meta(dc->bmd);
+		if (r < 0)
+			return r;
 		dc->writes_after_flush = 0;
 	}
+
+	return 0;
 }
 
 static void process_bio(struct dedup_config *dc, struct bio *bio)
 {
+	int r;
+
 	switch (bio_data_dir(bio)) {
 	case READ:
-		handle_read(dc, bio);
+		r = handle_read(dc, bio);
 		break;
 	case WRITE:
-		handle_write(dc, bio);
-		break;
-	default:
-		DMERR("Unknown request type!");
-		bio_endio(bio, -EINVAL);
+		r = handle_write(dc, bio);
 	}
+
+	if (r < 0)
+		bio_endio(bio, r);
 }
 
 static void do_work(struct work_struct *ws)
@@ -539,7 +598,7 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	struct init_param_inram iparam_inram;
 	struct init_param_cowbtree iparam_cowbtree;
-	void *iparam;
+	void *iparam = NULL;
 	struct metadata *md = NULL;
 
 	sector_t data_size;
@@ -602,18 +661,18 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	dc->pblocks = data_size;
 
 	/* Meta-data backend specific part */
-	if (da.backend == BKND_INRAM) {
+	switch(da.backend) {
+	case BKND_INRAM:
 		dc->mdops = &metadata_ops_inram;
 		iparam_inram.blocks = dc->pblocks;
 		iparam = &iparam_inram;
-	} else if (da.backend == BKND_COWBTREE) {
-		r = -EINVAL;
+		break;
+	case BKND_COWBTREE:
 		dc->mdops = &metadata_ops_cowbtree;
 		iparam_cowbtree.blocks = dc->pblocks;
 		iparam_cowbtree.metadata_bdev = da.meta_dev->bdev;
 		iparam = &iparam_cowbtree;
-	} else
-		BUG();
+	}
 
 	md = dc->mdops->init_meta(iparam, &unformatted);
 	if (IS_ERR(md)) {
@@ -649,14 +708,18 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	r = dc->mdops->flush_meta(md);
-	if (r < 0)
-		BUG();
+	if (r < 0) {
+		ti->error = "failed to flush metadata";
+		goto bad_kvstore_init;
+	}
 
 	if (!unformatted && dc->mdops->get_private_data) {
 		r = dc->mdops->get_private_data(md, (void **)&data,
 				sizeof(struct on_disk_stats));
-		if (r < 0)
-			BUG();
+		if (r < 0) {
+			ti->error = "failed to get private data from superblock";
+			goto bad_kvstore_init;
+		}
 
 		logical_block_counter = data->logical_block_counter;
 		physical_block_counter = data->physical_block_counter;
@@ -723,12 +786,12 @@ static void dm_dedup_dtr(struct dm_target *ti)
 		ret = dc->mdops->set_private_data(dc->bmd, &data,
 				sizeof(struct on_disk_stats));
 		if (ret < 0)
-			BUG();
+			DMERR("Failed to set the private data in superblock.");
 	}
 
 	ret = dc->mdops->flush_meta(dc->bmd);
 	if (ret < 0)
-		BUG();
+		DMERR("Failed to flush the metadata to disk.");
 
 	flush_workqueue(dc->workqueue);
 	destroy_workqueue(dc->workqueue);
@@ -799,7 +862,7 @@ static int mark_lbn_pbn_bitmap(void *key, int32_t ksize,
 static int cleanup_hash_pbn(void *key, int32_t ksize, void *value,
 			    int32_t vsize, void *data)
 {
-	int ret = 0, r = 0;
+	int r = 0;
 	uint64_t pbn_val = 0;
 	struct mark_and_sweep_data *ms_data =
 		(struct mark_and_sweep_data *)data;
@@ -813,19 +876,20 @@ static int cleanup_hash_pbn(void *key, int32_t ksize, void *value,
 	BUG_ON(pbn_val > ms_data->bitmap_len);
 
 	if (test_bit(pbn_val, ms_data->bitmap) == 0) {
-		ret = dc->kvs_hash_pbn->kvs_delete(dc->kvs_hash_pbn,
+		r = dc->kvs_hash_pbn->kvs_delete(dc->kvs_hash_pbn,
 							key, ksize);
-		if (ret < 0)
-			BUG();
+		if (r < 0)
+			goto out;
 
 		r = dc->mdops->dec_refcount(ms_data->dc->bmd, pbn_val);
 		if (r < 0)
-			BUG();
+			goto out;
 
 		ms_data->cleanup_count++;
 	}
 
-	return ret;
+out:
+	return r;
 }
 
 /*

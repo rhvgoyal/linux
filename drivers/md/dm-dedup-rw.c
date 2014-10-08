@@ -200,6 +200,9 @@ out_fail:
 out_allocfail:
 	kfree(pl);
 out:
+	if (r < 0)
+		return ERR_PTR(r);
+
 	return clone;
 }
 
@@ -217,7 +220,7 @@ static struct bio *prepare_bio_without_pbn(struct dedup_config *dc,
 
 	r = merge_data(dc, clone->bi_io_vec->bv_page, bio);
 	if (r < 0)
-		BUG();
+		return ERR_PTR(r);
 out:
 	return clone;
 }
@@ -242,7 +245,7 @@ struct bio *prepare_bio_on_write(struct dedup_config *dc, struct bio *bio)
 		clone = prepare_bio_with_pbn(dc, bio,
 					     lbnpbn_value.pbn * dc->sectors_per_block);
 	else
-		BUG();
+		return ERR_PTR(r);
 
 	return clone;
 }

@@ -78,7 +78,7 @@ static int get_next_slot(struct hash_desc_table *desc_table)
 
 	do {
 		if (count == DEDUP_HASH_DESC_COUNT)
-			BUG();
+			return -EBUSY;
 
 		count++;
 		num = atomic_long_inc_return(&(desc_table->slot_counter));

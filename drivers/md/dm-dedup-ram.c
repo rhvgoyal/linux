@@ -456,7 +456,9 @@ static int kvs_insert_sparse_inram(struct kvstore *kvs, void *key,
 	struct kvstore_inram *kvinram = NULL;
 
 	BUG_ON(!kvs);
-	BUG_ON(ksize > kvs->ksize);
+
+	if (ksize > kvs->ksize)
+		return -EINVAL;
 
 	kvinram = container_of(kvs, struct kvstore_inram, ckvs);
 
