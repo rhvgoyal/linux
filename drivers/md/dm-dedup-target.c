@@ -602,7 +602,6 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	uint64_t logical_block_counter = 0;
 	uint64_t physical_block_counter = 0;
 
-	uint32_t flushrq = 0;
 	mempool_t *dedup_work_pool = NULL;
 
 	bool unformatted;
@@ -738,7 +737,7 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	strcpy(dc->crypto_alg, da.hash_algo);
 	dc->crypto_key_size = crypto_key_size;
 
-	dc->flushrq = flushrq;
+	dc->flushrq = da.flushrq;
 	dc->writes_after_flush = 0;
 
 	r = dm_set_target_max_io_len(ti, dc->sectors_per_block);
