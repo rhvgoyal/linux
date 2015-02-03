@@ -179,7 +179,7 @@ Decide on metadata and data devices:
 
 Compute target size assuming 1.5 dedup ratio:
    # DATA_DEV_SIZE=`blockdev --getsz $DATA_DEV`
-   # TARGET_SIZE=`expr $DATA_DEV_SIZE \* 10 / 15`
+   # TARGET_SIZE=`expr $DATA_DEV_SIZE \* 15 / 10`
 
 Reset metadata device:
    # dd if=/dev/zero of=$META_DEV bs=4096 count=1
