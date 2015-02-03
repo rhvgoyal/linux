@@ -43,6 +43,8 @@
 #define CRYPTO_ALG_NAME_LEN     16
 #define MAX_DIGEST_SIZE	SHA256_DIGEST_SIZE
 
+#define MAX_BACKEND_NAME_LEN (64)
+
 #define MIN_DEDUP_WORK_IO	16
 
 /* Per target instance structure */
@@ -73,6 +75,7 @@ struct dedup_config {
 	struct dm_io_client *io_client;		/* used for read-on-write
 						   of misaligned requests */
 
+	char backend_str[MAX_BACKEND_NAME_LEN];
 	struct metadata_ops *mdops;
 	struct metadata *bmd;
 	struct kvstore *kvs_hash_pbn;

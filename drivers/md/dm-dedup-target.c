@@ -21,7 +21,6 @@
 #include "dm-dedup-kvstore.h"
 
 #define MAX_DEV_NAME_LEN (64)
-#define MAX_BACKEND_NAME_LEN (64)
 
 #define MIN_DATA_DEV_BLOCK_SIZE (4 * 1024)
 #define MAX_DATA_DEV_BLOCK_SIZE (1024 * 1024)
@@ -431,6 +430,7 @@ struct dedup_args {
 	char hash_algo[CRYPTO_ALG_NAME_LEN];
 
 	enum backend backend;
+	char backend_str[MAX_BACKEND_NAME_LEN];
 
 	uint32_t flushrq;
 };
@@ -515,6 +515,8 @@ static int parse_backend(struct dedup_args *da, struct dm_arg_set *as,
 		*err = "Unsupported metadata backend";
 		return -EINVAL;
 	}
+
+	strlcpy(da->backend_str, backend, MAX_BACKEND_NAME_LEN);
 
 	return 0;
 }
@@ -666,6 +668,8 @@ static int dm_dedup_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		iparam = &iparam_cowbtree;
 	}
 
+	strcpy(dc->backend_str, da.backend_str);
+
 	md = dc->mdops->init_meta(iparam, &unformatted);
 	if (IS_ERR(md)) {
 		ti->error = "failed to initialize backend metadata";
@@ -813,7 +817,6 @@ static void dm_dedup_status(struct dm_target *ti, status_type_t status_type,
 
 	switch (status_type) {
 	case STATUSTYPE_INFO:
-	case STATUSTYPE_TABLE:
 		data_used_block_count = dc->physical_block_counter;
 		data_actual_block_count = dc->logical_block_counter;
 		data_total_block_count = dc->pblocks;
@@ -831,6 +834,11 @@ static void dm_dedup_status(struct dm_target *ti, status_type_t status_type,
 		DMEMIT("%llu %llu %llu %llu %llu %llu",
 			dc->writes, dc->uniqwrites, dc->dupwrites,
 			dc->reads_on_writes, dc->overwrites, dc->newwrites);
+		break;
+	case STATUSTYPE_TABLE:
+		DMEMIT("%s %s %u %s %s %u",
+			dc->metadata_dev->name, dc->data_dev->name, dc->block_size,
+			dc->crypto_alg, dc->backend_str, dc->flushrq);
 	}
 }
 
