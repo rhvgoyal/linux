@@ -227,15 +227,133 @@ static int superblock_all_zeroes(struct dm_block_manager *bm, bool *result)
 	return dm_bm_unlock(b);
 }
 
+static int __open_metadata(struct metadata *md)
+{
+	int ret;
+	struct dm_block *sblock;
+	struct metadata_superblock *disk_super;
+
+	ret = dm_bm_read_lock(md->meta_bm, METADATA_SUPERBLOCK_LOCATION, NULL,
+			      &sblock);
+	if (ret < 0) {
+		DMERR("could not read_lock superblock");
+		return ret;
+	}
+
+	disk_super = dm_block_data(sblock);
+
+	ret = dm_tm_open_with_sm(md->meta_bm, METADATA_SUPERBLOCK_LOCATION,
+				 disk_super->metadata_space_map_root,
+				 sizeof(disk_super->metadata_space_map_root),
+				 &md->tm, &md->meta_sm);
+	if (ret < 0) {
+		DMERR("could not open_with_sm superblock");
+		goto err_init_meta_sm;
+	}
+
+	md->data_sm = dm_sm_disk_open(md->tm, disk_super->data_space_map_root,
+				      sizeof(disk_super->data_space_map_root));
+	if (IS_ERR(md->data_sm)) {
+		DMERR("dm_disk_open failed");
+		ret = PTR_ERR(md->data_sm);
+		goto err_init_data_sm;
+	}
+
+	dm_bm_unlock(sblock);
+	return 0;
+
+err_init_data_sm:
+	dm_tm_destroy(md->tm);
+	dm_sm_destroy(md->meta_sm);
+err_init_meta_sm:
+	dm_bm_unlock(sblock);
+	return ret;
+}
+
+static int __format_metadata(struct metadata *md,
+			     struct init_param_cowbtree *params)
+{
+	int ret;
+
+	ret = dm_tm_create_with_sm(md->meta_bm, METADATA_SUPERBLOCK_LOCATION,
+				   &md->tm, &md->meta_sm);
+	if (ret < 0) {
+		DMERR("tm_create_with_sm failed");
+		return ret;
+	}
+
+	md->data_sm = dm_sm_disk_create(md->tm, params->blocks);
+	if (IS_ERR(md->data_sm)) {
+		DMERR("sm_disk_create failed");
+		ret = PTR_ERR(md->data_sm);
+		goto err_init_data_sm;
+	}
+
+	ret = write_initial_superblock(md);
+	if (ret < 0)
+		goto err_write_superblock;
+
+	return 0;
+
+err_write_superblock:
+	dm_sm_destroy(md->data_sm);
+err_init_data_sm:
+	dm_tm_destroy(md->tm);
+	dm_sm_destroy(md->meta_sm);
+
+	return ret;
+}
+
+static int __open_or_format_metadata(struct metadata *md,
+				     struct init_param_cowbtree *params,
+				     bool *unformatted)
+{
+	int ret;
+
+	ret = superblock_all_zeroes(md->meta_bm, unformatted);
+	if (ret)
+		return ret;
+
+	if (*unformatted)
+		return __format_metadata(md, params);
+
+	return __open_metadata(md);
+}
+
+static int __create_persistent_data_objects(struct metadata *md,
+					    struct init_param_cowbtree *params,
+					    bool *unformatted)
+{
+	int ret;
+
+	md->meta_bm = dm_block_manager_create(params->metadata_bdev,
+					      METADATA_BSIZE, METADATA_CACHESIZE,
+					      METADATA_MAXLOCKS);
+	if (IS_ERR(md->meta_bm)) {
+		DMERR("could not create block manager");
+		return PTR_ERR(md->meta_bm);
+	}
+
+	ret = __open_or_format_metadata(md, params, unformatted);
+	if (ret)
+		dm_block_manager_destroy(md->meta_bm);
+
+	return ret;
+}
+
+static void __destroy_persistent_data_objects(struct metadata *md)
+{
+	dm_sm_destroy(md->data_sm);
+	dm_sm_destroy(md->meta_sm);
+	dm_tm_destroy(md->tm);
+	dm_block_manager_destroy(md->meta_bm);
+}
+
 static struct metadata *init_meta_cowbtree(void *input_param, bool *unformatted)
 {
 	int ret;
 	struct metadata *md;
-	struct dm_block_manager *meta_bm;
-	struct dm_space_map *meta_sm;
-	struct dm_space_map *data_sm = NULL;
-	struct dm_transaction_manager *tm;
-	struct init_param_cowbtree *p =
+	struct init_param_cowbtree *params =
 				(struct init_param_cowbtree *)input_param;
 
 	DMINFO("Initializing COWBTREE backend");
@@ -244,102 +362,21 @@ static struct metadata *init_meta_cowbtree(void *input_param, bool *unformatted)
 	if (!md)
 		return ERR_PTR(-ENOMEM);
 
-	meta_bm = dm_block_manager_create(p->metadata_bdev, METADATA_BSIZE,
-					  METADATA_CACHESIZE, METADATA_MAXLOCKS);
-	if (IS_ERR(meta_bm)) {
-		md = (struct metadata *)meta_bm;
-		goto badbm;
-	}
+	ret = __create_persistent_data_objects(md, params, unformatted);
+	if (ret)
+		goto out_free_md;
 
-	ret = superblock_all_zeroes(meta_bm, unformatted);
-	if (ret) {
-		md = ERR_PTR(ret);
-		goto badtm;
-	}
-
-	if (!*unformatted) {
-		struct dm_block *sblock;
-		struct metadata_superblock *disk_super;
-
-		md->meta_bm = meta_bm;
-
-		ret = dm_bm_read_lock(meta_bm, METADATA_SUPERBLOCK_LOCATION,
-				      NULL, &sblock);
-		if (ret < 0) {
-			DMERR("could not read_lock superblock");
-			/* XXX: handle error */
-		}
-
-		disk_super = dm_block_data(sblock);
-
-		ret = dm_tm_open_with_sm(meta_bm, METADATA_SUPERBLOCK_LOCATION,
-					 disk_super->metadata_space_map_root,
-					 sizeof(disk_super->metadata_space_map_root),
-					 &md->tm, &md->meta_sm);
-		if (ret < 0) {
-			DMERR("could not open_with_sm superblock");
-			/* XXX: handle error */
-		}
-
-
-		md->data_sm = dm_sm_disk_open(md->tm, disk_super->data_space_map_root,
-					      sizeof(disk_super->data_space_map_root));
-		if (IS_ERR(md->data_sm)) {
-			DMERR("dm_disk_open failed");
-			/*XXX: handle error */
-		}
-
-		dm_bm_unlock(sblock);
-
-		goto begin_trans;
-	}
-
-	ret = dm_tm_create_with_sm(meta_bm, METADATA_SUPERBLOCK_LOCATION,
-				   &tm, &meta_sm);
-	if (ret < 0) {
-		md = ERR_PTR(ret);
-		goto badtm;
-	}
-
-	data_sm = dm_sm_disk_create(tm, p->blocks);
-	if (IS_ERR(data_sm)) {
-		md = (struct metadata *)data_sm;
-		goto badsm;
-	}
-
-	md->meta_bm = meta_bm;
-	md->tm = tm;
-	md->meta_sm = meta_sm;
-	md->data_sm = data_sm;
-
-	ret = write_initial_superblock(md);
-	if (ret < 0) {
-		md = ERR_PTR(ret);
-		goto badwritesuper;
-	}
-
-begin_trans:
 	ret = __begin_transaction(md);
-	if (ret < 0) {
-		md = ERR_PTR(ret);
-		goto badwritesuper;
-	}
-
-	md->kvs_linear = NULL;
-	md->kvs_sparse = NULL;
+	if (ret < 0)
+		goto out_destroy_persistent_data;
 
 	return md;
 
-badwritesuper:
-	dm_sm_destroy(data_sm);
-badsm:
-	dm_tm_destroy(tm);
-	dm_sm_destroy(meta_sm);
-badtm:
-	dm_block_manager_destroy(meta_bm);
-badbm:
+out_destroy_persistent_data:
+	__destroy_persistent_data_objects(md);
+out_free_md:
 	kfree(md);
-	return md;
+	return ERR_PTR(ret);
 }
 
 static void exit_meta_cowbtree(struct metadata *md)
@@ -351,10 +388,7 @@ static void exit_meta_cowbtree(struct metadata *md)
 		DMWARN("%s: __commit_transaction() failed, error = %d.",
 			__func__, ret);
 
-	dm_sm_destroy(md->data_sm);
-	dm_tm_destroy(md->tm);
-	dm_sm_destroy(md->meta_sm);
-	dm_block_manager_destroy(md->meta_bm);
+	__destroy_persistent_data_objects(md);
 
 	kfree(md->kvs_linear);
 	kfree(md->kvs_sparse);
