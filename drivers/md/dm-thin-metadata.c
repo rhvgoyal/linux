@@ -898,9 +898,11 @@ int dm_pool_metadata_close(struct dm_pool_metadata *pmd)
  * __open_device: Returns @td corresponding to device with id @dev,
  * creating it if @create is set and incrementing @td->open_count.
  * On failure, @td is undefined.
+ * If @exclusive is set, then -EBUSY is returned if device is already
+ * open.
  */
 static int __open_device(struct dm_pool_metadata *pmd,
-			 dm_thin_id dev, int create,
+			 dm_thin_id dev, int create, bool exclusive,
 			 struct dm_thin_device **td)
 {
 	int r, changed = 0;
@@ -918,6 +920,9 @@ static int __open_device(struct dm_pool_metadata *pmd,
 			 */
 			if (create)
 				return -EEXIST;
+
+			if (exclusive && td2->open_count > 0)
+				return -EBUSY;
 
 			td2->open_count++;
 			*td = td2;
@@ -1000,7 +1005,7 @@ static int __create_thin(struct dm_pool_metadata *pmd,
 		return r;
 	}
 
-	r = __open_device(pmd, dev, 1, &td);
+	r = __open_device(pmd, dev, 1, false, &td);
 	if (r) {
 		dm_btree_remove(&pmd->tl_info, pmd->root, &key, &pmd->root);
 		dm_btree_del(&pmd->bl_info, dev_root);
@@ -1030,7 +1035,7 @@ static int __set_snapshot_details(struct dm_pool_metadata *pmd,
 	int r;
 	struct dm_thin_device *td;
 
-	r = __open_device(pmd, origin, 0, &td);
+	r = __open_device(pmd, origin, 0, false, &td);
 	if (r)
 		return r;
 
@@ -1081,7 +1086,7 @@ static int __create_snap(struct dm_pool_metadata *pmd,
 
 	pmd->time++;
 
-	r = __open_device(pmd, dev, 1, &td);
+	r = __open_device(pmd, dev, 1, false, &td);
 	if (r)
 		goto bad;
 
@@ -1121,14 +1126,9 @@ static int __delete_device(struct dm_pool_metadata *pmd, dm_thin_id dev)
 	struct dm_thin_device *td;
 
 	/* TODO: failure should mark the transaction invalid */
-	r = __open_device(pmd, dev, 0, &td);
+	r = __open_device(pmd, dev, 0, true, &td);
 	if (r)
 		return r;
-
-	if (td->open_count > 1) {
-		__close_device(td);
-		return -EBUSY;
-	}
 
 	list_del(&td->list);
 	kfree(td);
@@ -1352,7 +1352,7 @@ int dm_pool_open_thin_device(struct dm_pool_metadata *pmd, dm_thin_id dev,
 
 	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
-		r = __open_device(pmd, dev, 0, td);
+		r = __open_device(pmd, dev, 0, true, td);
 	up_write(&pmd->root_lock);
 
 	return r;
