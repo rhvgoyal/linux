@@ -1490,6 +1490,8 @@ static void clone_bio(struct dm_target_io *tio, struct bio *bio,
 	struct bio *clone = &tio->clone;
 
 	__bio_clone_fast(clone, bio);
+	if (bio->bi_css)
+		bio_associate_blkcg(clone, bio->bi_css);
 
 	if (bio_integrity(bio))
 		bio_integrity_clone(clone, bio, GFP_NOIO);
