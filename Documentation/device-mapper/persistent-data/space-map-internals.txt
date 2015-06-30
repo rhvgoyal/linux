@@ -1,0 +1,175 @@
+				Space Maps
+				==========
+
+Space maps keep track of reference count of blocks they are managing. There
+are two space maps. Data space map is the one which keeps track of reference
+count of blocks of data device and metadata space map is the one which keeps
+track of reference count of metadata device blocks.
+
+Reference counts are primarily kept in a bitmap where we allocate 2 bits
+per block. Value 0 represents block is unused. Non zero value represent
+block is used. If reference count is above 2, then value 3 is stored in
+bitmap and another btree is used to store reference count where reference
+count can be 32bit value for each block.
+
+Following discussion will primarily focus on reference count bitmaps.
+
+Data Space Map bitmap layout
+=============================
+
+		  +---+---+---+
+		  |   |   |   |
+		  ++--+---+-+-+
+		   |        |
+	+---+----+-v+      +v--+-------+
+	|   |    |  |      |   |       |
+	+-+-+----+--+      +-+-+-------+
+	  |                  |
+	+-v------+         +-v-------+
+	| Bitmap |         | Bitmap  |
+	| Block0 |         | Block1  |
+	|        |         |         |
+	+--------+         +---------+
+
+Here bitmap blocks are the one which actually store the reference count
+of data blocks. And these bitmap blocks are indexed using a btree.
+
+All the blocks of bitmap are not contiguous. Instead, a btree is maintained
+so that one can lookup the next block of the bitmap. This btree stores
+"struct disk_index_entry" as value. disk_index entry basically has the block
+number along with other meta data. As for every physical block this bitmap
+maintains only 2bits of data, single disk entry can represent multiple
+physical blocks. That means key for this btree can be calculated as.
+
+key = PBN/entries_per_block
+
+For example, assume block size is 4KB (32Kb). That means one can keep reference
+counts for ~16K of blocks in a single metadata device block. Hence key would be.
+
+key = PBN/16K
+
+Note: There is a "struct disk_bitmap_header" stored in every block of bitmap.
+For simplicity I have not taken that into account above.
+
+Metadata Space Map bitmap layout
+================================
+
+ |SuperBlock| |MetaDataIndex| |B0| |B1|......................|Bn|
+
+ |MD0| |MD1| |MD2| ..........................................|MDn|
+
+ |MDn+1| ....................................................|MDp|
+ ...
+ ...
+
+Here B0 to Bn are bitmap blocks which actually store the referece count
+of metadata blocks. MD0 to MDn are metadata blocks which could be in
+use or free.
+
+MetaDataInxed is a 4KB size block which keeps the disk index entries.
+Disk index entry size is 16 bytes. That means this block can hold 256
+entries. 16 bytes are used for storing other things (checksum, padding,
+number of blocks), so only 255 disk index entries are stored in
+MetaDataIndex block.
+
+Each disk index entry points to one 4KB sized block. This is the bitmap
+block which actually stores the reference counts of metadata blocks. As
+2 bits per block are used for reference count, that means a 4KB block can
+keep reference count for ~16K blocks. Hence 255 disk entries can keep
+reference count for ~4M (16K * 255) number of blocks. And if each block size
+is 4KB, that means using this scheme total metadata device size can be
+approximately 16G (4M * 4KB).
+
+Hence we need one 4KB block for storing disk index entries. And then max of
+255 blocks for storing actual bitmap for metadata device blocks.
+
+Metadata Space bitmap Initilization
+===================================
+For an empty metadata device, a new metadata space map layout is created.
+First of all a 4KB block is allocated for storing disk index entries (right
+next to superblock). And one determines the size of metadata device, which
+in turn decides the number of blocks needed for bitmaps to store reference
+count and then initilizaiton logic allocates these blocks in a loop and
+stores their location in disk index entries.
+
+This initial allocator is really simple (bootstrap allocator). As we know
+that metadata device is initially empty, this allocator simply keeps on
+getting next block in the number sequence.
+
+Once all the required bitmap blocks have been allocated and associated
+disk index entries have been saved, we need to update this bitmap with
+the blocks which have been used for constructing the bitmap itself. So
+we go through all the allocated blocks and increment the reference count
+of these blocks in the bitmap. And this completes the metadata space bitmap
+initialization.
+
+Big reference count btree
+-------------------------
+This is a btree with key being the block number and value being the 32 bit
+value which keeps the reference count of the block. This is used only if
+reference count is more than 2 and bitmap can not store it.
+
+Space Map root and superblock
+-----------------------------
+Information about each space map is stored in super block. Both data and
+metadata space map implementations store following 4 pieces of information.
+
+- number of blocks
+- number of allocated blocks
+- bitmap root block (Small reference count bitmap)
+- big reference count btree root block.
+
+Getting reference count of a block
+-----------------------------------
+First we lookup the reference count into bitmap and if reference count is
+not 3, reference count value is returned to caller. But if reference count
+is 3, then we go on to lookup reference count value in big reference count
+btree.
+
+Incrementing/Decrementing reference count of a block
+-----------------------------------------------------
+First we retrieve disk_index_entry and reference count of the block from
+the bitmap. As this bitmap block is about to be updated with new reference
+count, bitmap block is shadowed. New reference count is stored in the
+shadowed bitmap block and corresponding disk_index_entry is updated to
+point to this new bitmap block and updated disk_index_entry is stored
+either in btree (for data space maps) or metadata index block (for meta
+data space maps).
+
+Finding a free block
+--------------------
+To find a free block, one goes through bitmap and tries to find first
+available block (reference count 0) and returns it. This block number is
+cached in so that next time search can be started from here instead
+of starting from the beginning. Once a free block is found, its reference
+count is incremented and then block is returned to the caller.
+
+Extending Space Maps
+--------------------
+Both data device and metadata devices can be reized. Hence, one needs
+the capability to be able to extend space map.
+
+Data space map extension logic calculates how many new bitmap blocks are
+needed to accomodate new data device size. These new bitmap blocks are
+allocated from metadata device and a respective disk index entries are
+prepared and inserted into btree. Nothing is done with big reference
+count btree.
+
+Metadata space map extension logic also calculates how many new bitmap
+blocks are needed, allocates these new blocks using (bootstrap space
+map allocator) and updates disk index entries in metadata index block.
+
+As new blocks from metadata devices have been allocated, one needs to
+update reference counts for these blocks in metadata space map bitmap.
+Once all the reference counts are updated, finally commit is performed
+which saves the in memory copy of metadata index onto disk (using a
+shadow block).
+
+Data Space Map API for device-mapper targets
+============================================
+Device mapper targets don't have to worry about touching metadata space
+maps. That will be internally managed by persistent data api through
+transaction manger.
+
+But targets will have to manage data space maps and be aware of what
+this API can do.
