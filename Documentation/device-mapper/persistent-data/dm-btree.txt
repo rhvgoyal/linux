@@ -1,0 +1,235 @@
+				DM Btree Overview
+				=================
+
+Device mapper uses muti level B+ trees with 64bit keys.
+
+Node Structure
+===============
+
+A node can be either internal node or leaf node. A node has a node header
+in the beginning followed by keys and values.
+
+struct btree_node {
+        struct node_header header;
+        __le64 keys[0];
+} __packed;
+
+
+ node-header | keys | values
+
+There is one value associated with each key. Keys with-in node are sorted
+and are searched using binary search algorithm.
+
+Tree Structure
+==============
+There are two kind of nodes. Internal nodes and leaf nodes. Internal node
+contain key/value pairs where values are pointing to another internal
+node or a leaf node. Leaf nodes have key/value pairs too and store the
+final values which caller is looking for.
+
+In the diagram below values have been hidden and only keys are being shown.
+
+		    (Intermediate Node)
+                  +------------+
+                  | 20|  45| 62+------------------------+
+                  ++--------------+                     |
+                   |              |                     |
+         +---------+----+      +--v-----+-----+     +-----------+
+         | 22| 27|      |      | 45| 48 |     |     | 67| 73 |  |
+         +--------------+      +--------+-----+     +-----------+
+	   (Leaf Node)
+
+Intermediate node has keys (ex 20, 45, 62) and associated values point to
+another intermediate or leaf nodes. Convention is that intermediate node
+key (key1) points to a node which contains keys greater then key1.
+
+For example, First leaf node can contain keys between 20 and 44. Second
+leaf node can contain values between 45 and 61 and third leaf node can
+container values greater than or equal to 62 in above picture.
+
+Locking
+=======
+There are two types of locking. Read only locking and the one which uses
+shadowing. Separate type of spine data structures are used for both the
+locks.
+
+ro_spine
+--------
+First type of spine is called ro_spine.
+
+struct ro_spine {
+        struct dm_btree_info *info;
+
+        int count;
+        struct dm_block *nodes[2];
+};
+
+It basically can acquire read locks on maximum two blocks. Looks like idea
+is to lock the block we are about to read and also lock the parent if there
+is one.
+
+shadow_spine
+------------
+This is shadow spine and can be used for creating a shadow block and taking
+a write lock on that block. This will primarily be used whenever we are
+modifying a btree and a shadow block needs to be created.
+
+struct shadow_spine {
+        struct dm_btree_info *info;
+
+        int count;
+        struct dm_block *nodes[2];
+
+        dm_block_t root;
+};
+
+Like ro_spine, it also keeps track of two blocks. Shadowed block is stored
+in s->nodes[]. Parent block is locked first and then child block is locked.
+
+->root keeps track of root of the shadowed tree during insert operation. Once
+the insertion is complete, caller is returned this new shadowed root.
+
+Common Operations
+=================
+
+dm_btree_empty()
+----------------
+Initialize empty tree. This just allocates a new block and initiliazes it to
+zero. Also initializes the node header in the block and returns the block
+number.
+
+dm_btree_lookup()
+-----------------
+Given single/two keys it looks up the multilevel B+ tree and returns the
+value. Values are copied in caller specified location in little endian
+format.
+
+dm_btree_insert()
+-----------------
+Insert or overwrite a value. When a new value is being inserted in a tree,
+each node along the path of insertion is shadowed. Also while traversing
+down, any node which is full is split. This possibly makes sure that when
+we insert a key in leaf, it will at most split leaf node and there will
+be space in parent node to take care of split at leaf node.
+
+First it calls btree_insert_raw() for top level tree. This will ensure that
+all the nodes in the path are shadowed and if any node was full it will be
+split.
+
+If top level key is not already present, that means we need to allocate
+another block/tree for lower level and insert it in top level tree leaf
+node.
+
+Finally, lower level of tree is checked and we call btree_insert_raw()
+again to shadow and lock the modification path and split any full nodes.
+If key is not present, it is inserted otherwise value associated with
+existing key is overwritten.
+
+If there is dec() operation available on value type and new value is not
+same as old value then ->dec() is called on old value before being overwritten.
+
+In the end, root of shadowed tree is returned to the caller.
+
+Common Internal Operations
+==========================
+
+lowerbound()
+------------
+
+insert_at()
+-----------
+It inserts a key and value pair in a node at given index. Also checks that
+there is enough space in the node to accomodate new key/value pair.
+
+btree_insert_raw()
+------------------
+It takes a tree, spine, value type and key to be inserted and returns the
+index of where to insert. The node to be inserted is added in shadow spine.
+
+First shadow_step() shadows the root block and takes the write lock. If node
+is already full then it is split. There are two methods of splitting, namely
+btree_split_beneath() and btree_split_sibling().
+
+btree_split_beneath() works on top most node and it splits it in two and
+creates a parent node for two new children. Following is taken from code.
+
+ Before:
+        +----------+
+        | A ++++++ |
+        +----------+
+
+
+ After:
+      +------------+
+      | A (shadow) |
+      +------------+
+          |   |
+   +------+   +----+
+   |               |
+   v               v
+ +-------+     +-------+
+ | B +++ |     | C +++ |
+ +-------+     +-------+
+
+btree_split_sibling() on the other hand works on intermediate nodes and takes
+a node and carves out another sibling out of it.
+
+Before:
+       +--------+
+       | Parent |
+       +--------+
+          |
+          v
+     +----------+
+     | A ++++++ |
+     +----------+
+
+
+After:
+             +--------+
+             | Parent |
+             +--------+
+               |     |
+               v     +------+
+         +---------+        |
+         | A* +++  |        v
+         +---------+   +-------+
+                       | B +++ |
+                       +-------+
+
+Where A* is a shadow of A.
+
+btree_split_beneath()
+---------------------
+It takes a node, creates a shadow of this node. Then it allocates two new
+blocks (new_block()) for left and right children. Now half of parent's entries
+(keys and values) are copied to left children and rest are copied to right
+children. Parent and child headers are updated accordingly.
+
+At the end, shadow spine is updated to take the right locks. First it now
+takes the lock on new shadowed parent and then based on key it decides which
+child falls in traversal path (left or right) and then takes the lock on
+that child.
+
+btree_split_sibling()
+---------------------
+This assumes that there is already a parent for node being split and there
+is enough space in parent to add another key/value pair. First we shadow
+the node being split and then allocate another node which will act as right
+child. Half of the key/values are in left node and rest half are copied to
+right node.
+
+Now parent node is updated to point to new shadowed left children (it was
+pointing to unshadowed child). And a new key/value is inserted in parent to
+point to new right children.
+
+Finally spine is updated to take lock on left or right child depending on
+the key being searched. One notable difference here is that we don't check
+the parent block in spine (s->nodes[0]). I think that comes from the fact
+that we already must have shadowed the parent and already must have updated
+the spine and this check will be redundant.
+
+We always shadow a block as we traverse down in insertion path and update the
+spine accordingly. So if we are splitting a child node, that means parent
+has already been shadowed and spine is already pointing to right parent and
+has write lock on it.
