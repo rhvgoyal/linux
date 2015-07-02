@@ -130,6 +130,38 @@ same as old value then ->dec() is called on old value before being overwritten.
 
 In the end, root of shadowed tree is returned to the caller.
 
+dm_btree_remove()
+-----------------
+Removes a key from the btree. It seems to be removing key/value only from
+lower level tree.
+
+As we traverse down the tree, we need to make sure that nodes in the key path
+have atleast b+1 entries. (Where b = minimum number of entries for a node).
+That way during actual key deletion even if one key is deleted from node,
+node will still be valid.
+
+To achieve this, as we decend down the tree, we look at all the child nodes
+and do rebalancing. We can either delete some node or redistribute entries
+among nodes.
+
+dm_btree_remove() first goes through top level tree and calls remove_raw().
+remove_raw() will make sure that blocks in the deletion path are shadowed
+at the same time it will also do necessary magic of rebalancing or
+redistributing keys in nodes so that a deletion of key at leaf node does
+not trigger deletion of more nodes.
+
+Once remove_raw() is done with top level tree, we extract the block of lower
+level tree and restart the for loop. And now we call remove_raw() on bottom
+level tree. Again, shadowing, rebalancing, redistribution happens on lower
+level tree and index of key/value to be deleted from bottom tree is returned.
+
+If index is valid, that means key is present in the tree. We call delete_at()
+to delete the key. Before that we also call ->dec() method on value, if
+there is one.
+
+In the end new shadowed root is returned and we exit the spine, unlocking
+any locks on the blocks.
+
 Common Internal Operations
 ==========================
 
@@ -233,3 +265,56 @@ We always shadow a block as we traverse down in insertion path and update the
 spine accordingly. So if we are splitting a child node, that means parent
 has already been shadowed and spine is already pointing to right parent and
 has write lock on it.
+
+remove_raw()
+------------
+This function shadows the block passed in and takes read-write lock. If this
+is leaf node, key/value pair is removed otherwise it tries to rebalance
+the children (rebalance_children()). Once rebalancing is done, we check if
+current shadowed block is leaf node and if yes, delete the key/value and
+return. Otherwise, we are still in internal node and we search for the key
+and retrieve the value of the next level block and repeat the loop.
+
+Once we shadow a node and if there is parent of the node, then we need to
+patch the parent to point to shadowed child and not the new child. This
+is along the lines that every insert/remove operation shadowes all the
+nodes in the path of modification.
+
+if (shadow_has_parent(s)) {
+	 __le64 location = cpu_to_le64(dm_block_location(shadow_current(s)));
+	memcpy(value_ptr(dm_block_data(shadow_parent(s)), i),
+                         &location, sizeof(__le64));
+}
+
+rebalance_children()
+--------------------
+If there is only one entry in node, that means there is only one child. That
+also means that one node is redundant. Hence all child's data is copied to
+parent and child is freed and function returns.
+
+Now we look for index of key with-in node. If we found a valid index for key,
+then we figure out how child belonging to that index has how many siblings. If
+there are both left and right sibling then rebalance3() is called. If only
+ther is only one sibling (either left/right), then rebalance2() is called.
+
+rebalance2() and __rebalance2()
+--------------------------------
+It first creates copies of both left and right children and modifies
+the parent to point to copies. Then __rebalance2() is called. __rebalance2()
+either merges two into a single node or redistributes the entries among
+the two.
+
+TODO: Figure how the rationale behind threshold calculation. And also figure
+      out why redistribution helps. Why not simply return if child in the
+      removal path has minimum b+1 entries.
+
+rebalance3() and __rebalance3()
+-------------------------------
+It gets index of left most child and then it creates copies of left, center
+and right child and updates the parent accordingly. Then it calls __rebalance3().
+
+__rebalance3() determines the threshold and if total number of enteries are
+less then that threshold, it deletes center node otherwise it redistributes
+entries using redistribute3().
+
+TODO: Figure out how threshold is calculated.
