@@ -47,6 +47,28 @@ For example, First leaf node can contain keys between 20 and 44. Second
 leaf node can contain values between 45 and 61 and third leaf node can
 container values greater than or equal to 62 in above picture.
 
+Splitting and Merging
+=====================
+Looks like constraint on a node are that it can can minimum of n and maximum
+of 3n entries.
+
+A node can contain maximum of 3n entries for a given n. This is calculated
+using calc_max_entries(). During key insert operation, if we encounter a
+node which is full (has max entries), it is split so that if insert operation
+adds a key in upper layers, it can be accomodated.
+
+During key deletion node merging or redistribution of keys can take place. When
+key balancing is happening between three nodes (__rebalance3()) looks like in
+total there need to be 4n + 1 keys otherwise center node is deleted. Not sure
+why it is that way. I was thinking that we would target n + 1 keys in each
+node so threshold would have been 3n + 3 instead. (or n+1 key in node of
+traversal and n keys on 2 other nodes. So threshold should have been 3n + 1).
+
+When 2 nodes are involved in rebalancing (__rebalance2()), then merge threshold
+is 2n+1. If total number of keys are less then that, then two nodes are merged
+otherwise keys are redistributed such that half the keys in left node and rest
+are in right node.
+
 Locking
 =======
 There are two types of locking. Read only locking and the one which uses
