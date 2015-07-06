@@ -162,6 +162,64 @@ there is one.
 In the end new shadowed root is returned and we exit the spine, unlocking
 any locks on the blocks.
 
+dm_btree_del()
+----------------
+Delete a btree. A recursive post order deletion algorithm is used. For
+example.
+
+                                A                                  
+                            +--------+                             
+                            | 2 |  11|                             
+                            +--------+                             
+                            |       |      C                       
+                B+----------v-+    +v-------+                      
+        +--------+ 2 | 4 |  8 |    |  13| 17+--------------+       
+        |        +---------------+ +--------+              |       
+        |             |          |    |                    |       
+        |             |          |    |                    |       
+        |             |          |    |                    |       
+    +--------+   +----v---+  +---v--+ |   +------+    +----v---+   
+    | 2 |  3 |   |4 | 5| 6|  | 8|10 | +--^+13|14 |    |17 |20  |   
+    +--------+   +--------+  +------+     +------+    +--------+   
+        D             E          F            G            H       
+
+In above example, deletion order of nodes will be D, E, F, B, G, H, C, A
+
+dm-btree are multi level. So deletion is little more complicated. First
+outer most level is deleted and then internal levels are deleted.
+
+A stack is maintained to keep track of nodes to be deleted. First root
+of the tree is pushed on to the stack (A). Then current child (starting with
+first) is pushed on stack (B). Then current child (D) of current top most
+frame (B) is pushed. Now B is top most frame and we notice this is leaf
+node and it is not internal level, So info->value_type.dec() is called
+on all the elements of node D. Finally pop_frame() is called to pop D
+and release it.
+
+Now B is top most frame and current child is E.  (D has already been taken
+care of). E is pushed onto stack and in next loop, all elements of E are
+free and E itself is freed. Same happens to F. In next round, there are more
+children of node B and it is freed.
+
+    if (f->current_child >= f->nr_children) {
+           pop_frame(s);
+           continue;
+   }
+
+And this continues till all the nodes have been freed.
+
+One interesting thing to note is that when we are pushing nodes on to the
+frame, we also start IO to prefetch the children blocks (prefetch_children).
+We know very soon these will be accessed.
+
+While we are pushing a node onto stack (push_frame) and if the node is
+shared (reference count is > 1), that means node can't be freed now. Also
+node is shared that means none of the children have to be freed.
+So push_frame() just decrements the reference count on the node and returns.
+
+A node is freed by calling pop_frame(). Which in turn drops the reference
+count on the node and calls dm_tm_unlock() to free buffer.
+
 Common Internal Operations
 ==========================
 
@@ -318,3 +376,5 @@ less then that threshold, it deletes center node otherwise it redistributes
 entries using redistribute3().
 
 TODO: Figure out how threshold is calculated.
+
+
