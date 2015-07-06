@@ -104,6 +104,32 @@ Given single/two keys it looks up the multilevel B+ tree and returns the
 value. Values are copied in caller specified location in little endian
 format.
 
+First a ro_spine is initialized and then btree_lookup_raw() is called for
+top level tree. A key search function lower_bound() is passed as parameter.
+btree_lookup_raw() takes the read lock on root node and searches for
+key using lower_bound(). lower_bound() returns the index where key might
+be present. It performs the binary search and either returns the index of
+exactly matching key or of the nearest lower key.
+
+If the node we are searching in is leaf node, then value associated with
+key index is retrieve and copied in user passed pointer. Actual key looked
+up also is returned. That way caller can compare the key and figure out if
+exact key was found or not.
+
+        *result_key = le64_to_cpu(ro_node(s)->keys[i]);
+        memcpy(v, value_ptr(ro_node(s), i), value_size);
+
+If node was internal node, then for loop continues and this time searching
+in children node where key can be and taking a read lock and process repeats.
+
+Upon return from btree_lookup_raw(), dm_btree_lookup() checkes if key exactly
+matched or not. If not, -ENODATA is returned otherwise search continues
+in the next level of tree and same process repeats one more time.
+
+When all the levels of tree have been traversed and keys match exactly, then
+return code 0 is returned and value associated with key has been copied in
+caller provided pointer.
+
 dm_btree_insert()
 -----------------
 Insert or overwrite a value. When a new value is being inserted in a tree,
