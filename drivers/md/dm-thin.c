@@ -2291,8 +2291,13 @@ static void do_no_space_timeout(struct work_struct *ws)
 	struct pool *pool = container_of(to_delayed_work(ws), struct pool,
 					 no_space_timeout);
 
-	if (get_pool_mode(pool) == PM_OUT_OF_DATA_SPACE && !pool->pf.error_if_no_space)
-		set_pool_mode(pool, PM_READ_ONLY);
+	if (get_pool_mode(pool) == PM_OUT_OF_DATA_SPACE && !pool->pf.error_if_no_space) {
+		pool->pf.error_if_no_space = true;
+		DMINFO("%s: Enabling pool feature error_if_no_space.",
+		       dm_device_name(pool->pool_md));
+		// Do we need additional locking here?
+		error_retry_list(pool);
+	}
 }
 
 /*----------------------------------------------------------------*/
