@@ -637,7 +637,7 @@ static inline int ovl_check_sticky(struct dentry *dentry)
 
 static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 {
-	enum ovl_path_type type;
+	enum ovl_path_type type, parent_type;
 	int err;
 
 	err = ovl_check_sticky(dentry);
@@ -653,7 +653,16 @@ static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 		goto out_drop_write;
 
 	type = ovl_path_type(dentry);
-	if (OVL_TYPE_PURE_UPPER(type)) {
+	parent_type = ovl_path_type(dentry->d_parent);
+
+	/*
+	 * After rename if a file is removed, it could have out of sync
+	 * numlower and forced "opaque" set which means file will not be
+	 * categorized as pure upper. So if parent is not type merge, then
+	 * it is not present in any of the lower so there should not be
+	 * any need to leave whiteout.
+	 */
+	if (OVL_TYPE_PURE_UPPER(type) || !OVL_TYPE_MERGE(parent_type)) {
 		err = ovl_remove_upper(dentry, is_dir);
 	} else {
 		const struct cred *old_cred;
