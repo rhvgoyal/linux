@@ -909,6 +909,19 @@ static int ovl_rename2(struct inode *olddir, struct dentry *old,
 			ovl_dentry_set_opaque(new, old_opaque);
 	}
 
+	/*
+	 * As file/dir is being renamed, ->numlower state is stale. It
+	 * should be ok to set it to zero as at new location file will
+	 * be either upper/pure_upper and numlower will be zero. In
+	 * case of directory, if destination dir is present it has to be
+	 * empty dir and rename should be overwriting that directory and
+	 * that should make lower level direcotry invisible hence
+	 * numlower=0 makes sense there too.
+	 */
+	ovl_free_lower(old);
+	if (!overwrite)
+		ovl_free_lower(new);
+
 	if (cleanup_whiteout)
 		ovl_cleanup(old_upperdir->d_inode, newdentry);
 

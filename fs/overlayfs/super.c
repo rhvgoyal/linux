@@ -205,6 +205,19 @@ void ovl_dentry_set_opaque(struct dentry *dentry, bool opaque)
 	oe->opaque = opaque;
 }
 
+void ovl_free_lower(struct dentry *dentry) {
+	struct ovl_entry *oe = dentry->d_fsdata;
+	int i;
+
+	if (!oe->numlower)
+		return;
+
+	for (i = 0; i < oe->numlower; i++)
+		dput(oe->lowerstack[i].dentry);
+
+	oe->numlower = 0;
+}
+
 void ovl_dentry_update(struct dentry *dentry, struct dentry *upperdentry)
 {
 	struct ovl_entry *oe = dentry->d_fsdata;
