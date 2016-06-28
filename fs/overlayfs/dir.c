@@ -640,6 +640,20 @@ static inline int ovl_check_sticky(struct dentry *dentry)
 	return 0;
 }
 
+static inline int ovl_check_unlink_rmdir(struct dentry *dentry, bool is_dir)
+{
+	struct inode *dir = ovl_dentry_real(dentry->d_parent)->d_inode;
+	struct dentry *realdentry = ovl_dentry_real(dentry);
+	int err;
+
+	if (is_dir)
+		err = security_inode_rmdir(dir, realdentry);
+	else
+		err = security_inode_unlink(dir, realdentry);
+
+	return err;
+}
+
 static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 {
 	enum ovl_path_type type;
@@ -658,6 +672,19 @@ static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 		goto out_drop_write;
 
 	type = ovl_path_type(dentry);
+	/*
+	 * If file/dir is on both lower and upper, then make sure task
+	 * has unlink/rmdir permission on upper. If file is on upper only,
+	 * then vfs_unlink()/vfs_rmdir will check it anyway. If file is on
+	 * lower only, it probably is not needed as we are not modifying
+	 * lower file at all.
+	 */
+	if (OVL_TYPE_UPPER(type) && !OVL_TYPE_PURE_UPPER(type)) {
+		err = ovl_check_unlink_rmdir(dentry, is_dir);
+		if (err)
+			goto out_drop_write;
+	}
+
 	if (OVL_TYPE_PURE_UPPER(type)) {
 		err = ovl_remove_upper(dentry, is_dir);
 	} else {

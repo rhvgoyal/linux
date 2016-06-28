@@ -528,6 +528,7 @@ int security_inode_unlink(struct inode *dir, struct dentry *dentry)
 		return 0;
 	return call_int_hook(inode_unlink, 0, dir, dentry);
 }
+EXPORT_SYMBOL(security_inode_unlink);
 
 int security_inode_symlink(struct inode *dir, struct dentry *dentry,
 			    const char *old_name)
@@ -551,6 +552,7 @@ int security_inode_rmdir(struct inode *dir, struct dentry *dentry)
 		return 0;
 	return call_int_hook(inode_rmdir, 0, dir, dentry);
 }
+EXPORT_SYMBOL(security_inode_rmdir);
 
 int security_inode_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
 {
