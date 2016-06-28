@@ -10,6 +10,7 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/xattr.h>
+#include <linux/security.h>
 #include "overlayfs.h"
 
 static int ovl_copy_up_truncate(struct dentry *dentry)
@@ -175,6 +176,7 @@ static const char *ovl_get_link(struct dentry *dentry,
 {
 	struct dentry *realdentry;
 	struct inode *realinode;
+	int err;
 
 	if (!dentry)
 		return ERR_PTR(-ECHILD);
@@ -185,6 +187,14 @@ static const char *ovl_get_link(struct dentry *dentry,
 	if (WARN_ON(!realinode->i_op->get_link))
 		return ERR_PTR(-EPERM);
 
+	/*
+	 * In case of rcu walk mode, dentry seems to be NULL and we
+	 * return -ECHILD in that case. So if we are here we are not
+	 * in rcu walk mode.
+	 */
+	err = security_inode_follow_link(realdentry, realinode, false);
+	if (err)
+		return ERR_PTR(err);
 	return realinode->i_op->get_link(realdentry, realinode, done);
 }
 
@@ -192,12 +202,17 @@ static int ovl_readlink(struct dentry *dentry, char __user *buf, int bufsiz)
 {
 	struct path realpath;
 	struct inode *realinode;
+	int err;
 
 	ovl_path_real(dentry, &realpath);
 	realinode = realpath.dentry->d_inode;
 
 	if (!realinode->i_op->readlink)
 		return -EINVAL;
+
+	err = security_inode_readlink(realpath.dentry);
+	if (err)
+		return err;
 
 	touch_atime(&realpath);
 

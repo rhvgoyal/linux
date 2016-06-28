@@ -589,6 +589,7 @@ int security_inode_readlink(struct dentry *dentry)
 		return 0;
 	return call_int_hook(inode_readlink, 0, dentry);
 }
+EXPORT_SYMBOL(security_inode_readlink);
 
 int security_inode_follow_link(struct dentry *dentry, struct inode *inode,
 			       bool rcu)
@@ -597,6 +598,7 @@ int security_inode_follow_link(struct dentry *dentry, struct inode *inode,
 		return 0;
 	return call_int_hook(inode_follow_link, 0, dentry, inode, rcu);
 }
+EXPORT_SYMBOL(security_inode_follow_link);
 
 int security_inode_permission(struct inode *inode, int mask)
 {
