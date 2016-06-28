@@ -406,6 +406,15 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 
 	override_cred->fsuid = old_cred->fsuid;
 	override_cred->fsgid = old_cred->fsgid;
+	if (!hardlink) {
+		err = security_dentry_create_files_as(dentry, stat->mode,
+						&dentry->d_name, old_cred,
+						override_cred);
+		if (err) {
+			put_cred(override_cred);
+			goto out_revert_creds;
+		}
+	}
 	put_cred(override_creds(override_cred));
 	put_cred(override_cred);
 
