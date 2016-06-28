@@ -521,6 +521,7 @@ int security_inode_link(struct dentry *old_dentry, struct inode *dir,
 		return 0;
 	return call_int_hook(inode_link, 0, old_dentry, dir, new_dentry);
 }
+EXPORT_SYMBOL(security_inode_link);
 
 int security_inode_unlink(struct inode *dir, struct dentry *dentry)
 {
@@ -537,6 +538,7 @@ int security_inode_symlink(struct inode *dir, struct dentry *dentry,
 		return 0;
 	return call_int_hook(inode_symlink, 0, dir, dentry, old_name);
 }
+EXPORT_SYMBOL(security_inode_symlink);
 
 int security_inode_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
@@ -560,6 +562,7 @@ int security_inode_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 		return 0;
 	return call_int_hook(inode_mknod, 0, dir, dentry, mode, dev);
 }
+EXPORT_SYMBOL(security_inode_mknod);
 
 int security_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
 			   struct inode *new_dir, struct dentry *new_dentry,

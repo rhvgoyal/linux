@@ -321,6 +321,38 @@ static struct dentry *ovl_check_empty_and_clear(struct dentry *dentry)
 	return ret;
 }
 
+static int ovl_check_create_or_link(struct inode *udir, struct dentry *upper,
+					int mode, dev_t rdev, const char *link,
+					struct dentry *hardlink)
+{
+	int err = 0;
+
+	if (hardlink) {
+		err = security_inode_link(hardlink, udir, upper);
+	} else {
+		switch (mode & S_IFMT) {
+		case S_IFREG:
+			err = security_inode_create(udir, upper, mode);
+			break;
+		case S_IFDIR:
+			err = security_inode_mkdir(udir, upper, mode);
+			break;
+		case S_IFCHR:
+		case S_IFBLK:
+		case S_IFIFO:
+		case S_IFSOCK:
+			err = security_inode_mknod(udir, upper, mode, rdev);
+			break;
+		case S_IFLNK:
+			err = security_inode_symlink(udir, upper, link);
+			break;
+		default:
+			err = -EPERM;
+		}
+	}
+	return err;
+}
+
 static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 				    struct kstat *stat, const char *link,
 				    struct dentry *hardlink)
@@ -332,6 +364,8 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 	struct dentry *upper;
 	struct dentry *newdentry;
 	int err;
+	const struct cred *old_cred;
+	struct cred *override_cred;
 
 	if (WARN_ON(!workdir))
 		return -EROFS;
@@ -340,16 +374,35 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 	if (err)
 		goto out;
 
-	newdentry = ovl_lookup_temp(workdir, dentry);
-	err = PTR_ERR(newdentry);
-	if (IS_ERR(newdentry))
-		goto out_unlock;
-
 	upper = lookup_one_len(dentry->d_name.name, upperdir,
 			       dentry->d_name.len);
 	err = PTR_ERR(upper);
 	if (IS_ERR(upper))
+		goto out_unlock;
+
+	err = ovl_check_create_or_link(udir, upper, stat->mode, stat->rdev,
+					link, hardlink);
+	if (err)
 		goto out_dput;
+	/*
+	 * Switch to mounter's creds now. This does cred allocation with
+	 * mutexes held. Is it a concern?
+	 */
+	old_cred = ovl_override_creds(dentry->d_sb);
+	err = -ENOMEM;
+	override_cred = prepare_creds();
+	if (!override_cred)
+		goto out_revert_creds;
+
+	override_cred->fsuid = old_cred->fsuid;
+	override_cred->fsgid = old_cred->fsgid;
+	put_cred(override_creds(override_cred));
+	put_cred(override_cred);
+
+	newdentry = ovl_lookup_temp(workdir, dentry);
+	err = PTR_ERR(newdentry);
+	if (IS_ERR(newdentry))
+		goto out_revert_creds;
 
 	err = ovl_create_real(wdir, newdentry, stat, link, hardlink, true);
 	if (err)
@@ -374,9 +427,11 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 	ovl_create_upper_post(dentry, newdentry, inode);
 	newdentry = NULL;
 out_dput2:
-	dput(upper);
-out_dput:
 	dput(newdentry);
+out_revert_creds:
+	revert_creds(old_cred);
+out_dput:
+	dput(upper);
 out_unlock:
 	unlock_rename(workdir, upperdir);
 out:
@@ -409,23 +464,9 @@ static int ovl_create_or_link(struct dentry *dentry, int mode, dev_t rdev,
 	if (!ovl_dentry_is_opaque(dentry)) {
 		err = ovl_create_upper(dentry, inode, &stat, link, hardlink);
 	} else {
-		const struct cred *old_cred;
-		struct cred *override_cred;
 
-		old_cred = ovl_override_creds(dentry->d_sb);
-
-		err = -ENOMEM;
-		override_cred = prepare_creds();
-		if (override_cred) {
-			override_cred->fsuid = old_cred->fsuid;
-			override_cred->fsgid = old_cred->fsgid;
-			put_cred(override_creds(override_cred));
-			put_cred(override_cred);
-
-			err = ovl_create_over_whiteout(dentry, inode, &stat,
-						       link, hardlink);
-		}
-		revert_creds(old_cred);
+		err = ovl_create_over_whiteout(dentry, inode, &stat, link,
+						hardlink);
 	}
 
 	if (!err)
