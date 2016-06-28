@@ -338,6 +338,18 @@
  *	@inode contains the inode structure to check.
  *	@mask contains the permission mask.
  *	Return 0 if permission is granted.
+ * @inode_permission_lower:
+ *	Check permission to a lower inode in an overlay or union mount. This
+ *	hook is called by the inode_permission_lower function, so a security
+ *	module can use it to provide additional checking for existing
+ *	Linux inode permission checks. Notice that this hook is called when a
+ *	file is opened (as well as many other operations), whereas the
+ *	file_permission hook is called when the actual read/write operations
+ *	are performed.
+ *	@inode contains the lower inode structure to check.
+ *	@inode_union contains the corresponding overlay/union inode
+ *	@mask contains the permission mask.
+ *	Return 0 if permission is granted.
  * @inode_setattr:
  *	Check permission before setting file attributes.  Note that the kernel
  *	call to notify_change is performed from several locations, whenever
@@ -1452,6 +1464,7 @@ union security_list_options {
 	int (*inode_follow_link)(struct dentry *dentry, struct inode *inode,
 				 bool rcu);
 	int (*inode_permission)(struct inode *inode, int mask);
+	int (*inode_permission_lower)(struct inode *inode, struct inode *union_inode, int mask);
 	int (*inode_setattr)(struct dentry *dentry, struct iattr *attr);
 	int (*inode_getattr)(const struct path *path);
 	int (*inode_setxattr)(struct dentry *dentry, const char *name,
@@ -1736,6 +1749,7 @@ struct security_hook_heads {
 	struct list_head inode_readlink;
 	struct list_head inode_follow_link;
 	struct list_head inode_permission;
+	struct list_head inode_permission_lower;
 	struct list_head inode_setattr;
 	struct list_head inode_getattr;
 	struct list_head inode_setxattr;

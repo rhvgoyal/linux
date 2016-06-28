@@ -388,6 +388,51 @@ static inline int do_inode_permission(struct inode *inode, int mask)
 	return generic_permission(inode, mask);
 }
 
+/* A helper function for __inode_permission() and inode_permission_lower() */
+static inline int inode_permission_common(struct inode *inode, int mask) {
+	int retval;
+
+	if (unlikely(mask & MAY_WRITE)) {
+		/*
+		 * Nobody gets write access to an immutable file.
+		 */
+		if (IS_IMMUTABLE(inode))
+			return -EACCES;
+	}
+
+	retval = do_inode_permission(inode, mask);
+	if (retval)
+		return retval;
+
+	return devcgroup_inode_permission(inode, mask);
+}
+
+/**
+ * inode_permission_lower - Check for access rights to lower inode of
+ * 			    overlay/union
+ * @inode: lower inode to check permission on
+ * @union_inode: corresponding overlay or union inode
+ * @mask: Right to check for (%MAY_READ, %MAY_WRITE, %MAY_EXEC)
+ *
+ * Check for read/write/execute permissions on lower inode of overlay/union
+ *
+ * When checking for MAY_APPEND, MAY_WRITE must also be set in @mask.
+ *
+ * This does not check for a read-only file system.
+ */
+int inode_permission_lower(struct inode *inode, struct inode *union_inode,
+		           int mask)
+{
+	int retval;
+
+	retval = inode_permission_common(inode, mask);
+	if (retval)
+		return retval;
+
+	return security_inode_permission_lower(inode, union_inode, mask);
+}
+EXPORT_SYMBOL(inode_permission_lower);
+
 /**
  * __inode_permission - Check for access rights to a given inode
  * @inode: Inode to check permission on
@@ -404,19 +449,7 @@ int __inode_permission(struct inode *inode, int mask)
 {
 	int retval;
 
-	if (unlikely(mask & MAY_WRITE)) {
-		/*
-		 * Nobody gets write access to an immutable file.
-		 */
-		if (IS_IMMUTABLE(inode))
-			return -EACCES;
-	}
-
-	retval = do_inode_permission(inode, mask);
-	if (retval)
-		return retval;
-
-	retval = devcgroup_inode_permission(inode, mask);
+	retval = inode_permission_common(inode, mask);
 	if (retval)
 		return retval;
 

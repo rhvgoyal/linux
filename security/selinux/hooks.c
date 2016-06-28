@@ -3026,6 +3026,28 @@ static int selinux_inode_permission(struct inode *inode, int mask)
 	return rc;
 }
 
+static int selinux_inode_permission_lower(struct inode *inode,
+					  struct inode *union_inode, int mask)
+{
+	const struct superblock_security_struct *sbsec;
+	/*
+	 * lower inode does not have to be checked for WRITE as lower file
+	 * will be copied up and WRITEs will go to upper file. So remove
+	 * WRITE|APPEND checks from mask. Do this only for context
+	 * mounts as for non-context mounts even copied up file gets same
+	 * label as lower. And if lower does not allow WRITE access, there
+	 * is no point in allowing copy up and deny access on upper.
+	 *
+	 * special_files are not copied up, don't dilute checks for these.
+	 */
+	sbsec = union_inode->i_sb->s_security;
+	if (sbsec->behavior == SECURITY_FS_USE_MNTPOINT &&
+	    !special_file(inode->i_mode))
+		mask &= ~(MAY_WRITE | MAY_APPEND);
+
+	return selinux_inode_permission(inode, mask);
+}
+
 static int selinux_inode_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	const struct cred *cred = current_cred();
@@ -6133,6 +6155,7 @@ static struct security_hook_list selinux_hooks[] = {
 	LSM_HOOK_INIT(inode_readlink, selinux_inode_readlink),
 	LSM_HOOK_INIT(inode_follow_link, selinux_inode_follow_link),
 	LSM_HOOK_INIT(inode_permission, selinux_inode_permission),
+	LSM_HOOK_INIT(inode_permission_lower, selinux_inode_permission_lower),
 	LSM_HOOK_INIT(inode_setattr, selinux_inode_setattr),
 	LSM_HOOK_INIT(inode_getattr, selinux_inode_getattr),
 	LSM_HOOK_INIT(inode_setxattr, selinux_inode_setxattr),

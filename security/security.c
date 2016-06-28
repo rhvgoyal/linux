@@ -616,6 +616,15 @@ int security_inode_permission(struct inode *inode, int mask)
 	return call_int_hook(inode_permission, 0, inode, mask);
 }
 
+int security_inode_permission_lower(struct inode *inode,
+				    struct inode *union_inode, int mask)
+{
+	if (unlikely(IS_PRIVATE(inode)))
+		return 0;
+	return call_int_hook(inode_permission_lower, 0, inode,
+			     union_inode, mask);
+}
+
 int security_inode_setattr(struct dentry *dentry, struct iattr *attr)
 {
 	int ret;
@@ -1675,6 +1684,8 @@ struct security_hook_heads security_hook_heads = {
 		LIST_HEAD_INIT(security_hook_heads.inode_follow_link),
 	.inode_permission =
 		LIST_HEAD_INIT(security_hook_heads.inode_permission),
+	.inode_permission_lower =
+		LIST_HEAD_INIT(security_hook_heads.inode_permission_lower),
 	.inode_setattr =
 		LIST_HEAD_INIT(security_hook_heads.inode_setattr),
 	.inode_getattr =
