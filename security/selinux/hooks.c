@@ -3309,6 +3309,32 @@ static int selinux_inode_copy_up_xattr(struct dentry *src, struct dentry *dst,
 	return 0;
 }
 
+static int selinux_inode_create_upper_cred(struct inode *inode,
+					   const struct cred **old)
+{
+	struct task_security_struct *tsec;
+	const struct superblock_security_struct *sbsec;
+	struct cred *new_creds;
+
+	sbsec = inode->i_sb->s_security;
+
+	if (!(sbsec->flags & SE_SBINITIALIZED) ||
+	    !(sbsec->behavior == SECURITY_FS_USE_MNTPOINT)) {
+		return 0;
+	}
+
+	new_creds = prepare_creds();
+	if (!new_creds)
+		return -ENOMEM;
+
+	tsec = new_creds->security;
+	/* Use context label passed during mount */
+	tsec->create_sid = sbsec->mntpoint_sid;
+	*old = override_creds(new_creds);
+	put_cred(new_creds);
+	return 0;
+}
+
 /* file security operations */
 
 static int selinux_revalidate_file_permission(struct file *file, int mask)
@@ -6097,6 +6123,7 @@ static struct security_hook_list selinux_hooks[] = {
 	LSM_HOOK_INIT(inode_getsecid, selinux_inode_getsecid),
 	LSM_HOOK_INIT(inode_copy_up, selinux_inode_copy_up),
 	LSM_HOOK_INIT(inode_copy_up_xattr, selinux_inode_copy_up_xattr),
+	LSM_HOOK_INIT(inode_create_upper_cred, selinux_inode_create_upper_cred),
 
 	LSM_HOOK_INIT(file_permission, selinux_file_permission),
 	LSM_HOOK_INIT(file_alloc_security, selinux_file_alloc_security),

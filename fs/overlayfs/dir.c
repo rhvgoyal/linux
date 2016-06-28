@@ -176,6 +176,7 @@ static int ovl_create_upper(struct dentry *dentry, struct inode *inode,
 	struct dentry *upperdir = ovl_dentry_upper(dentry->d_parent);
 	struct inode *udir = upperdir->d_inode;
 	struct dentry *newdentry;
+	const struct cred *old_creds = NULL;
 	int err;
 
 	inode_lock_nested(udir, I_MUTEX_PARENT);
@@ -184,7 +185,16 @@ static int ovl_create_upper(struct dentry *dentry, struct inode *inode,
 	err = PTR_ERR(newdentry);
 	if (IS_ERR(newdentry))
 		goto out_unlock;
+
+	if (!hardlink) {
+		err = security_inode_create_upper_cred(inode, &old_creds);
+		if (err)
+			goto out_dput;
+	}
+
 	err = ovl_create_real(udir, newdentry, stat, link, hardlink, false);
+	if (old_creds)
+		revert_creds(old_creds);
 	if (err)
 		goto out_dput;
 

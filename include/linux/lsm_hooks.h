@@ -423,6 +423,18 @@
  *	error code to abort the copy up. Note that the caller is responsible
  *	for reading and writing the xattrs as this hook is merely a filter.
  *
+ * @inode_create_upper_cred:
+ *	A file is about to be created on upper layer of union/overlay
+ *	filesystem. This hook prepares and installes new set of creds
+ *	which should be used for file creation. These creds might have been
+ *	prepared in such a way to get the label right on file creation.
+ *	Caller is responsible to call revert_cred(old) to switch to original
+ *	creds and that should drop last reference on newly allocated creds
+ *	by hook.
+ *	@inode indicates the inode belonging to union dentry of file.
+ *	@old original creds if creds were switched
+ *	Returns 0 on success or a negative error code on error.
+ *
  * Security hooks for file operations
  *
  * @file_permission:
@@ -1449,6 +1461,8 @@ union security_list_options {
 	int (*inode_copy_up) (struct dentry *src, const struct cred **old);
 	int (*inode_copy_up_xattr) (struct dentry *src, struct dentry *dst,
 				    const char *name, void *value, size_t size);
+	int (*inode_create_upper_cred) (struct inode *inode,
+					const struct cred **old);
 
 	int (*file_permission)(struct file *file, int mask);
 	int (*file_alloc_security)(struct file *file);
@@ -1722,6 +1736,7 @@ struct security_hook_heads {
 	struct list_head inode_getsecid;
 	struct list_head inode_copy_up;
 	struct list_head inode_copy_up_xattr;
+	struct list_head inode_create_upper_cred;
 	struct list_head file_permission;
 	struct list_head file_alloc_security;
 	struct list_head file_free_security;

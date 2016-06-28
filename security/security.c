@@ -747,6 +747,13 @@ int security_inode_copy_up_xattr(struct dentry *src, struct dentry *dst,
 }
 EXPORT_SYMBOL(security_inode_copy_up_xattr);
 
+int security_inode_create_upper_cred(struct inode *inode,
+					const struct cred **old)
+{
+	return call_int_hook(inode_create_upper_cred, 0, inode, old);
+}
+EXPORT_SYMBOL(security_inode_create_upper_cred);
+
 int security_file_permission(struct file *file, int mask)
 {
 	int ret;
@@ -1687,6 +1694,8 @@ struct security_hook_heads security_hook_heads = {
 		LIST_HEAD_INIT(security_hook_heads.inode_copy_up),
 	.inode_copy_up_xattr =
 		LIST_HEAD_INIT(security_hook_heads.inode_copy_up_xattr),
+	.inode_create_upper_cred =
+		LIST_HEAD_INIT(security_hook_heads.inode_create_upper_cred),
 	.file_permission =
 		LIST_HEAD_INIT(security_hook_heads.file_permission),
 	.file_alloc_security =
