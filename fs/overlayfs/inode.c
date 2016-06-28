@@ -265,7 +265,7 @@ ssize_t ovl_getxattr(struct dentry *dentry, struct inode *inode,
 	if (ovl_is_private_xattr(name))
 		return -ENODATA;
 
-	return vfs_getxattr(realdentry, name, value, size);
+	return vfs_getxattr_noperm(realdentry, name, value, size);
 }
 
 ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)

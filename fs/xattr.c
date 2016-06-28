@@ -209,18 +209,10 @@ vfs_getxattr_alloc(struct dentry *dentry, const char *name, char **xattr_value,
 }
 
 ssize_t
-vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
+vfs_getxattr_noperm(struct dentry *dentry, const char *name, void *value, size_t size)
 {
 	struct inode *inode = dentry->d_inode;
 	int error;
-
-	error = xattr_permission(inode, name, MAY_READ);
-	if (error)
-		return error;
-
-	error = security_inode_getxattr(dentry, name);
-	if (error)
-		return error;
 
 	if (!strncmp(name, XATTR_SECURITY_PREFIX,
 				XATTR_SECURITY_PREFIX_LEN)) {
@@ -241,6 +233,24 @@ nolsm:
 		error = -EOPNOTSUPP;
 
 	return error;
+}
+EXPORT_SYMBOL_GPL(vfs_getxattr_noperm);
+
+ssize_t
+vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
+{
+	struct inode *inode = dentry->d_inode;
+	int error;
+
+	error = xattr_permission(inode, name, MAY_READ);
+	if (error)
+		return error;
+
+	error = security_inode_getxattr(dentry, name);
+	if (error)
+		return error;
+
+	return vfs_getxattr_noperm(dentry, name, value, size);
 }
 EXPORT_SYMBOL_GPL(vfs_getxattr);
 
