@@ -103,6 +103,14 @@ retry:
 			goto retry;
 		}
 
+		error = security_inode_copy_up_xattr(old, new,
+						     name, value, size);
+		if (error < 0)
+			break;
+		if (error == 1) {
+			error = 0;
+			continue; /* Discard */
+		}
 		error = vfs_setxattr(new, name, value, size, 0);
 		if (error)
 			break;
