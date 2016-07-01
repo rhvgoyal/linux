@@ -312,6 +312,49 @@ out:
 	return err;
 }
 
+struct posix_acl *ovl_get_acl(struct inode *inode, int type)
+{
+	struct ovl_entry *oe;
+	struct dentry *alias = NULL;
+	struct inode *realinode;
+	struct dentry *realdentry;
+	bool is_upper;
+	struct posix_acl *acl = NULL;
+
+	if (S_ISDIR(inode->i_mode)) {
+		oe = inode->i_private;
+	} else {
+		/*
+		 * For non-directories find an alias and get the info
+		 * from there.
+		 */
+		alias = d_find_any_alias(inode);
+		if (WARN_ON(!alias))
+			return ERR_PTR(-ENOENT);
+
+		oe = alias->d_fsdata;
+	}
+
+	realdentry = ovl_entry_real(oe, &is_upper);
+	realinode = ACCESS_ONCE(realdentry->d_inode);
+	if (!realinode) {
+		acl = ERR_PTR(-ENOENT);
+		goto out_dput;
+	}
+
+	if (!IS_POSIXACL(realinode))
+		goto out_dput;
+
+	if (!realinode->i_op->get_acl)
+		goto out_dput;
+
+	acl = realinode->i_op->get_acl(realinode, type);
+
+out_dput:
+	dput(alias);
+	return acl;
+}
+
 static bool ovl_open_need_copy_up(int flags, enum ovl_path_type type,
 				  struct dentry *realdentry)
 {
@@ -367,6 +410,7 @@ static const struct inode_operations ovl_file_inode_operations = {
 	.getxattr	= ovl_getxattr,
 	.listxattr	= ovl_listxattr,
 	.removexattr	= ovl_removexattr,
+	.get_acl	= ovl_get_acl,
 };
 
 static const struct inode_operations ovl_symlink_inode_operations = {

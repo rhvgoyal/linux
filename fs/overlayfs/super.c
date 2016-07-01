@@ -1163,6 +1163,7 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_op = &ovl_super_operations;
 	sb->s_root = root_dentry;
 	sb->s_fs_info = ufs;
+	sb->s_flags |= MS_POSIXACL;
 
 	return 0;
 
