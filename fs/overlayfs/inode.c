@@ -277,16 +277,11 @@ ssize_t ovl_getxattr(struct dentry *dentry, struct inode *inode,
 		     const char *name, void *value, size_t size)
 {
 	struct dentry *realdentry = ovl_dentry_real(dentry);
-	ssize_t sz;
-	const struct cred *old_cred;
 
 	if (ovl_is_private_xattr(name))
 		return -ENODATA;
 
-	old_cred = ovl_override_creds(dentry->d_sb);
-	sz = vfs_getxattr(realdentry, name, value, size);
-	revert_creds(old_cred);
-	return size;
+	return vfs_getxattr_noperm(realdentry, name, value, size);
 }
 
 ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)
