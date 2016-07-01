@@ -180,6 +180,7 @@ static int ovl_create_upper(struct dentry *dentry, struct inode *inode,
 	ovl_dentry_version_inc(dentry->d_parent);
 	ovl_dentry_update(dentry, newdentry);
 	ovl_copyattr(newdentry->d_inode, inode);
+	ovl_copymode(newdentry->d_inode, inode);
 	d_instantiate(dentry, inode);
 	newdentry = NULL;
 out_dput:
@@ -366,6 +367,7 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 	ovl_dentry_version_inc(dentry->d_parent);
 	ovl_dentry_update(dentry, newdentry);
 	ovl_copyattr(newdentry->d_inode, inode);
+	ovl_copymode(newdentry->d_inode, inode);
 	d_instantiate(dentry, inode);
 	newdentry = NULL;
 out_dput2:

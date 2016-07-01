@@ -65,8 +65,10 @@ int ovl_setattr(struct dentry *dentry, struct iattr *attr)
 
 		inode_lock(upperdentry->d_inode);
 		err = notify_change(upperdentry, attr, NULL);
-		if (!err)
+		if (!err) {
 			ovl_copyattr(upperdentry->d_inode, dentry->d_inode);
+			ovl_copymode(upperdentry->d_inode, dentry->d_inode);
+		}
 		inode_unlock(upperdentry->d_inode);
 	}
 	ovl_drop_write(dentry);
@@ -387,13 +389,11 @@ struct inode *ovl_new_inode(struct super_block *sb, umode_t mode,
 	if (!inode)
 		return NULL;
 
-	mode &= S_IFMT;
-
 	inode->i_ino = get_next_ino();
 	inode->i_mode = mode;
 	inode->i_flags |= S_NOATIME | S_NOCMTIME;
 
-	switch (mode) {
+	switch (mode & S_IFMT) {
 	case S_IFDIR:
 		inode->i_private = oe;
 		inode->i_op = &ovl_dir_inode_operations;
@@ -413,7 +413,7 @@ struct inode *ovl_new_inode(struct super_block *sb, umode_t mode,
 		break;
 
 	default:
-		WARN(1, "illegal file type: %i\n", mode);
+		WARN(1, "illegal file type: %i\n", mode & S_IFMT);
 		iput(inode);
 		inode = NULL;
 	}

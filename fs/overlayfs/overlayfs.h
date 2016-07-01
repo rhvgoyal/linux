@@ -189,6 +189,11 @@ static inline void ovl_copyattr(struct inode *from, struct inode *to)
 	to->i_gid = from->i_gid;
 }
 
+static inline void ovl_copymode(struct inode *from, struct inode *to)
+{
+	to->i_mode = from->i_mode;
+}
+
 /* dir.c */
 extern const struct inode_operations ovl_dir_inode_operations;
 struct dentry *ovl_lookup_temp(struct dentry *workdir, struct dentry *dentry);

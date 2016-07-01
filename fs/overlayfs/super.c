@@ -964,6 +964,7 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	unsigned int stacklen = 0;
 	unsigned int i;
 	bool remote = false;
+	umode_t root_mode;
 	int err;
 
 	err = -ENOMEM;
@@ -1130,7 +1131,13 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	if (!oe)
 		goto out_put_cred;
 
-	root_dentry = d_make_root(ovl_new_inode(sb, S_IFDIR, oe));
+	if (upperpath.dentry) {
+		root_mode = upperpath.dentry->d_inode->i_mode;
+	} else {
+		root_mode = stack[0].dentry->d_inode->i_mode;
+	}
+
+	root_dentry = d_make_root(ovl_new_inode(sb, root_mode, oe));
 	if (!root_dentry)
 		goto out_free_oe;
 
