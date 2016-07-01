@@ -92,6 +92,7 @@ int ovl_permission(struct inode *inode, int mask)
 	struct inode *realinode;
 	struct dentry *realdentry;
 	bool is_upper;
+	const struct cred *old_cred;
 	int err;
 
 	if (S_ISDIR(inode->i_mode)) {
@@ -165,7 +166,17 @@ int ovl_permission(struct inode *inode, int mask)
 			goto out_dput;
 	}
 
+	/*
+	 * Check overlay inode with the creds of task and underlying inode
+	 * with creds of mounter
+	 */
+	err = generic_permission(inode, mask);
+	if (err)
+		goto out_dput;
+
+	old_cred = ovl_override_creds(inode->i_sb);
 	err = __inode_permission(realinode, mask);
+	revert_creds(old_cred);
 out_dput:
 	dput(alias);
 	return err;
