@@ -3270,6 +3270,32 @@ static void selinux_inode_getsecid(struct inode *inode, u32 *secid)
 	*secid = isec->sid;
 }
 
+static int selinux_inode_copy_up(struct dentry *src, const struct cred **old)
+{
+	u32 sid;
+	struct cred *new_creds;
+	struct task_security_struct *tsec;
+
+	new_creds = prepare_creds();
+	if (!new_creds)
+		return -ENOMEM;
+
+	/* Get label from overlay inode and set it in create_sid */
+	selinux_inode_getsecid(d_inode(src), &sid);
+	tsec = new_creds->security;
+	tsec->create_sid = sid;
+	*old = override_creds(new_creds);
+
+	/*
+	 * At this point of time we have 2 refs on new_creds. One by
+	 * prepare_creds and other by override_creds. Drop one reference
+	 * so that as soon as caller calls revert_creds(old), this cred
+	 * will be freed.
+	 */
+	put_cred(new_creds);
+	return 0;
+}
+
 /* file security operations */
 
 static int selinux_revalidate_file_permission(struct file *file, int mask)
@@ -6056,6 +6082,7 @@ static struct security_hook_list selinux_hooks[] = {
 	LSM_HOOK_INIT(inode_setsecurity, selinux_inode_setsecurity),
 	LSM_HOOK_INIT(inode_listsecurity, selinux_inode_listsecurity),
 	LSM_HOOK_INIT(inode_getsecid, selinux_inode_getsecid),
+	LSM_HOOK_INIT(inode_copy_up, selinux_inode_copy_up),
 
 	LSM_HOOK_INIT(file_permission, selinux_file_permission),
 	LSM_HOOK_INIT(file_alloc_security, selinux_file_alloc_security),
