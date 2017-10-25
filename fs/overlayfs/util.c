@@ -227,6 +227,35 @@ void ovl_dentry_set_upper_alias(struct dentry *dentry)
 	oe->has_upper = true;
 }
 
+bool ovl_dentry_check_upperdata(struct dentry *dentry) {
+	if (!S_ISREG(d_inode(dentry)->i_mode))
+		return false;
+
+	if (!ovl_dentry_lower(dentry))
+		return false;
+
+	return true;
+}
+
+bool ovl_dentry_needs_data_copy_up(struct dentry *dentry, int flags) {
+	if (!ovl_dentry_check_upperdata(dentry))
+		return false;
+
+	if (!S_ISREG(d_inode(dentry)->i_mode))
+		return false;
+
+	if (!flags)
+		return false;
+
+	if (!(OPEN_FMODE(flags) & FMODE_WRITE))
+		return false;
+
+	if (likely(ovl_test_flag(OVL_UPPERDATA, d_inode(dentry))))
+		return false;
+
+	return true;
+}
+
 bool ovl_redirect_dir(struct super_block *sb)
 {
 	struct ovl_fs *ofs = sb->s_fs_info;
@@ -310,13 +339,14 @@ struct file *ovl_path_open(struct path *path, int flags)
 	return dentry_open(path, flags | O_NOATIME, current_cred());
 }
 
-int ovl_copy_up_start(struct dentry *dentry)
+int ovl_copy_up_start(struct dentry *dentry, int flags)
 {
 	struct ovl_inode *oi = OVL_I(d_inode(dentry));
 	int err;
 
 	err = mutex_lock_interruptible(&oi->lock);
-	if (!err && ovl_dentry_has_upper_alias(dentry)) {
+	if (!err && ovl_dentry_has_upper_alias(dentry) &&
+	    !ovl_dentry_needs_data_copy_up(dentry, flags)) {
 		err = 1; /* Already copied up */
 		mutex_unlock(&oi->lock);
 	}
