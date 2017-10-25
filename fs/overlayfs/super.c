@@ -101,10 +101,15 @@ static struct dentry *ovl_d_real(struct dentry *dentry,
 			err = ovl_check_append_only(d_inode(real), open_flags);
 			if (err)
 				return ERR_PTR(err);
+
+			if (ovl_dentry_check_upperdata(dentry) &&
+			    !ovl_test_flag(OVL_UPPERDATA, d_inode(dentry)))
+				goto lower;
 		}
 		return real;
 	}
 
+lower:
 	real = ovl_dentry_lower(dentry);
 	if (!real)
 		goto bug;
