@@ -39,6 +39,11 @@ module_param_named(index, ovl_index_def, bool, 0644);
 MODULE_PARM_DESC(ovl_index_def,
 		 "Default to on or off for the inodes index feature");
 
+static bool ovl_metacopy_def = IS_ENABLED(CONFIG_OVERLAY_FS_METACOPY);
+module_param_named(metacopy, ovl_metacopy_def, bool, 0644);
+MODULE_PARM_DESC(ovl_metacopy_def,
+		 "Default to on or off for the metadata only copy up feature");
+
 static void ovl_dentry_release(struct dentry *dentry)
 {
 	struct ovl_entry *oe = dentry->d_fsdata;
@@ -303,6 +308,9 @@ static int ovl_show_options(struct seq_file *m, struct dentry *dentry)
 	if (ufs->config.index != ovl_index_def)
 		seq_printf(m, ",index=%s",
 			   ufs->config.index ? "on" : "off");
+	if (ufs->config.metacopy != ovl_metacopy_def)
+		seq_printf(m, ",metacopy=%s",
+			   ufs->config.metacopy ? "on" : "off");
 	return 0;
 }
 
@@ -336,6 +344,8 @@ enum {
 	OPT_REDIRECT_DIR_OFF,
 	OPT_INDEX_ON,
 	OPT_INDEX_OFF,
+	OPT_METACOPY_ON,
+	OPT_METACOPY_OFF,
 	OPT_ERR,
 };
 
@@ -348,6 +358,8 @@ static const match_table_t ovl_tokens = {
 	{OPT_REDIRECT_DIR_OFF,		"redirect_dir=off"},
 	{OPT_INDEX_ON,			"index=on"},
 	{OPT_INDEX_OFF,			"index=off"},
+	{OPT_METACOPY_ON,		"metacopy=on"},
+	{OPT_METACOPY_OFF,		"metacopy=off"},
 	{OPT_ERR,			NULL}
 };
 
@@ -426,6 +438,14 @@ static int ovl_parse_opt(char *opt, struct ovl_config *config)
 
 		case OPT_INDEX_OFF:
 			config->index = false;
+			break;
+
+		case OPT_METACOPY_ON:
+			config->metacopy = true;
+			break;
+
+		case OPT_METACOPY_OFF:
+			config->metacopy = false;
 			break;
 
 		default:
@@ -644,9 +664,16 @@ static int ovl_lower_dir(const char *name, struct path *path,
 	 * The inodes index feature needs to encode and decode file
 	 * handles, so it requires that all layers support them.
 	 */
-	if (ofs->config.index && !ovl_can_decode_fh(path->dentry->d_sb)) {
+	if ((ofs->config.index || ofs->config.metacopy) &&
+	     !ovl_can_decode_fh(path->dentry->d_sb)) {
+		if (ofs->config.index)
+			pr_warn("overlayfs: fs on '%s' does not support file handles, falling back to index=off.\n", name);
+
+		if (ofs->config.metacopy)
+			pr_warn("overlayfs: fs on '%s' does not support file handles, falling back to metacopy=off.\n", name);
+
 		ofs->config.index = false;
-		pr_warn("overlayfs: fs on '%s' does not support file handles, falling back to index=off.\n", name);
+		ofs->config.metacopy = false;
 	}
 
 	return 0;
@@ -847,6 +874,8 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 
 	ufs->config.redirect_dir = ovl_redirect_dir_def;
 	ufs->config.index = ovl_index_def;
+	ufs->config.metacopy = ovl_metacopy_def;
+
 	err = ovl_parse_opt((char *) data, &ufs->config);
 	if (err)
 		goto out_free_config;
@@ -1057,7 +1086,8 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	else if (ufs->upper_mnt->mnt_sb != ufs->same_sb)
 		ufs->same_sb = NULL;
 
-	if (!(ovl_force_readonly(ufs)) && ufs->config.index) {
+	if (!(ovl_force_readonly(ufs)) &&
+	      (ufs->config.index || ufs->config.metacopy)) {
 		/* Verify lower root is upper root origin */
 		err = ovl_verify_origin(upperpath.dentry, ufs->lower_mnt[0],
 					stack[0].dentry, false, true);
@@ -1065,7 +1095,9 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 			pr_err("overlayfs: failed to verify upper root origin\n");
 			goto out_put_lower_mnt;
 		}
+	}
 
+	if (!(ovl_force_readonly(ufs)) && ufs->config.index) {
 		ufs->indexdir = ovl_workdir_create(sb, ufs, workpath.dentry,
 						   OVL_INDEXDIR_NAME, true);
 		if (ufs->indexdir) {
