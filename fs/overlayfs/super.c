@@ -102,9 +102,16 @@ static struct dentry *ovl_d_real(struct dentry *dentry,
 			if (err)
 				return ERR_PTR(err);
 
-			if (ovl_dentry_check_upperdata(dentry) &&
-			    !ovl_test_flag(OVL_UPPERDATA, d_inode(dentry)))
-				goto lower;
+			if (ovl_dentry_check_upperdata(dentry)) {
+				if (!ovl_test_flag(OVL_UPPERDATA,
+				    d_inode(dentry)))
+					goto lower;
+				/*
+				 * Pairs with smp_wmb in
+				 * ovl_copy_up_meta_inode_data()
+				 */
+				smp_rmb();
+			}
 		}
 		return real;
 	}

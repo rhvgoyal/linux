@@ -466,7 +466,12 @@ static int ovl_copy_up_meta_inode_data(struct ovl_copy_up_ctx *c)
 	err= vfs_removexattr(upperpath.dentry, OVL_XATTR_METACOPY);
 	if (err)
 		return err;
-
+	/*
+	 * Pairs with smp_rmb() in ovl_dentry_needs_data_copy_up(). Make sure
+	 * if OVL_UPPERDATA flag is visible, then all the write operations
+	 * before it are visible as well.
+	 */
+	smp_wmb();
 	ovl_set_flag(OVL_UPPERDATA, d_inode(c->dentry));
 	return err;
 }

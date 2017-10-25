@@ -238,6 +238,8 @@ bool ovl_dentry_check_upperdata(struct dentry *dentry) {
 }
 
 bool ovl_dentry_needs_data_copy_up(struct dentry *dentry, int flags) {
+	bool upperdata;
+
 	if (!ovl_dentry_check_upperdata(dentry))
 		return false;
 
@@ -250,7 +252,14 @@ bool ovl_dentry_needs_data_copy_up(struct dentry *dentry, int flags) {
 	if (!(OPEN_FMODE(flags) & FMODE_WRITE))
 		return false;
 
-	if (likely(ovl_test_flag(OVL_UPPERDATA, d_inode(dentry))))
+	upperdata = ovl_test_flag(OVL_UPPERDATA, d_inode(dentry));
+	/*
+	 * Pairs with smp_wmb() in ovl_copy_up_meta_inode_data(). Make sure
+	 * if setting of OVL_UPPERDATA is visible, then effects of writes
+	 * before that are visible too.
+	 */
+	smp_rmb();
+	if (upperdata)
 		return false;
 
 	return true;
