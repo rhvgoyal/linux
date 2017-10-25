@@ -140,6 +140,18 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 	if (!is_dir && ovl_test_flag(OVL_INDEX, d_inode(dentry)))
 		stat->nlink = dentry->d_inode->i_nlink;
 
+	if (ovl_dentry_upper(dentry) && ovl_dentry_check_upperdata(dentry) &&
+	    !ovl_test_flag(OVL_UPPERDATA, d_inode(dentry))) {
+		struct kstat lowerstat;
+
+		if (WARN_ON(!OVL_TYPE_ORIGIN(type)))
+			goto out;
+		ovl_path_lower(dentry, &realpath);
+		err = vfs_getattr(&realpath, &lowerstat, STATX_BLOCKS, flags);
+		if (err)
+			goto out;
+		stat->blocks = lowerstat.blocks;
+	}
 out:
 	revert_creds(old_cred);
 
