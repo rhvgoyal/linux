@@ -80,8 +80,18 @@ static struct dentry *ovl_d_real(struct dentry *dentry,
 	struct dentry *real;
 	int err;
 
-	if (flags & D_REAL_UPPER)
-		return ovl_dentry_upper(dentry);
+	if (flags & D_REAL_UPPER) {
+		real = ovl_dentry_upper(dentry);
+		if (!real)
+			return NULL;
+		if (!ovl_dentry_check_upperdata(dentry))
+			return real;
+		if (!ovl_test_flag(OVL_UPPERDATA, d_inode(dentry)))
+			return NULL;
+		/* Pairs with smp_wmb() in ovl_copy_up_meta_inode_data() */
+		smp_rmb();
+		return real;
+	}
 
 	if (!d_is_reg(dentry)) {
 		if (!inode || inode == d_inode(dentry))
@@ -113,6 +123,9 @@ static struct dentry *ovl_d_real(struct dentry *dentry,
 				smp_rmb();
 			}
 		}
+
+		WARN_ON(ovl_dentry_check_upperdata(dentry) &&
+			!ovl_test_flag((OVL_UPPERDATA), d_inode(dentry)));
 		return real;
 	}
 
