@@ -470,9 +470,6 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 	/*
 	 * Store identifier of lower inode in upper inode xattr to
 	 * allow lookup of the copy up origin inode.
-	 *
-	 * Don't set origin when we are breaking the association with a lower
-	 * hard link.
 	 */
 	if (c->origin) {
 		err = ovl_set_origin(c->dentry, c->lowerpath.dentry, temp);
@@ -538,9 +535,6 @@ static int ovl_do_copy_up(struct ovl_copy_up_ctx *c)
 	    c->stat.nlink > 1)
 		indexed = true;
 
-	if (S_ISDIR(c->stat.mode) || c->stat.nlink == 1 || indexed)
-		c->origin = true;
-
 	if (indexed) {
 		c->destdir = ovl_indexdir(c->dentry->d_sb);
 		err = ovl_get_index_name(c->lowerpath.dentry, &c->destname);
@@ -596,6 +590,7 @@ static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 		.parent = parent,
 		.dentry = dentry,
 		.workdir = ovl_workdir(dentry),
+		.origin = true,
 	};
 
 	if (WARN_ON(!ctx.workdir))
