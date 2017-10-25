@@ -637,12 +637,13 @@ static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 	int err;
 	DEFINE_DELAYED_CALL(done);
 	struct path parentpath;
+	struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
 	struct ovl_copy_up_ctx ctx = {
 		.parent = parent,
 		.dentry = dentry,
 		.workdir = ovl_workdir(dentry),
 		.origin = true,
-		.metacopy = false,
+		.metacopy = ofs->config.metacopy,
 	};
 
 	if (WARN_ON(!ctx.workdir))
