@@ -517,17 +517,14 @@ static struct dentry *ovl_lookup_index(struct dentry *dentry,
 	inode = d_inode(index);
 	if (d_is_negative(index)) {
 		if (upper && d_inode(origin)->i_nlink > 1) {
-			pr_warn_ratelimited("overlayfs: hard link with origin but no index (ino=%lu).\n",
-					    d_inode(origin)->i_ino);
-			goto fail;
+			pr_warn_ratelimited("overlayfs: hard link with origin but no index (%pd2).\n",
+					    upper);
 		}
-
-		dput(index);
-		index = NULL;
+		goto out_dput;
 	} else if (upper && d_inode(upper) != inode) {
-		pr_warn_ratelimited("overlayfs: wrong index found (index=%pd2, ino=%lu, upper ino=%lu).\n",
-				    index, inode->i_ino, d_inode(upper)->i_ino);
-		goto fail;
+		pr_warn_ratelimited("overlayfs: broken hard link - ignoring index (%pd2).\n",
+				    upper);
+		goto out_dput;
 	} else if (ovl_dentry_weird(index) || ovl_is_whiteout(index) ||
 		   ((inode->i_mode ^ d_inode(origin)->i_mode) & S_IFMT)) {
 		/*
@@ -546,6 +543,11 @@ static struct dentry *ovl_lookup_index(struct dentry *dentry,
 out:
 	kfree(name.name);
 	return index;
+
+out_dput:
+	dput(index);
+	index = NULL;
+	goto out;
 
 fail:
 	dput(index);
@@ -709,7 +711,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		upperdentry = dget(index);
 
 	if (upperdentry || ctr) {
-		inode = ovl_get_inode(dentry, upperdentry);
+		inode = ovl_get_inode(dentry, upperdentry, index);
 		err = PTR_ERR(inode);
 		if (IS_ERR(inode))
 			goto out_free_oe;
