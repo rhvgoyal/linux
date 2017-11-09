@@ -66,6 +66,16 @@ out:
 	return err;
 }
 
+static void ovl_stat_set_encryption(struct kstat *ustat, struct kstat *lstat) {
+	if (!((lstat->attributes_mask & STATX_ATTR_ENCRYPTED) &&
+	    (lstat->attributes & STATX_ATTR_ENCRYPTED)))
+		return;
+
+	ustat->attributes |= STATX_ATTR_ENCRYPTED;
+	ustat->attributes_mask |= STATX_ATTR_ENCRYPTED;
+}
+
+
 int ovl_getattr(const struct path *path, struct kstat *stat,
 		u32 request_mask, unsigned int flags)
 {
@@ -123,8 +133,10 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 			else
 				stat->dev = ovl_get_pseudo_dev(dentry);
 
-			if (metacopy)
+			if (metacopy) {
 				stat->blocks = lowerstat.blocks;
+				ovl_stat_set_encryption(stat, &lowerstat);
+			}
 		}
 		if (samefs) {
 			/*
