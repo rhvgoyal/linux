@@ -253,6 +253,43 @@ bool ovl_metaonly_copy_up(struct dentry *dentry, umode_t mode, int flags)
 	return true;
 }
 
+static bool ovl_should_check_upperdata(struct dentry *dentry) {
+	if (!S_ISREG(d_inode(dentry)->i_mode))
+		return false;
+
+	if (!ovl_dentry_lower(dentry))
+		return false;
+
+	return true;
+}
+
+bool ovl_has_upperdata(struct dentry *dentry) {
+	if (!ovl_should_check_upperdata(dentry))
+		return true;
+
+	return ovl_test_flag(OVL_UPPERDATA, d_inode(dentry));
+}
+
+void ovl_set_upperdata(struct dentry *dentry) {
+	if (!S_ISREG(d_inode(dentry)->i_mode))
+		return;
+
+	ovl_set_flag(OVL_UPPERDATA, d_inode(dentry));
+}
+
+bool ovl_dentry_needs_data_copy_up(struct dentry *dentry, int flags) {
+	if (!flags)
+		return false;
+
+	if (!(OPEN_FMODE(flags) & FMODE_WRITE))
+		return false;
+
+	if (ovl_has_upperdata(dentry))
+		return false;
+
+	return true;
+}
+
 bool ovl_redirect_dir(struct super_block *sb)
 {
 	struct ovl_fs *ofs = sb->s_fs_info;
@@ -336,13 +373,13 @@ struct file *ovl_path_open(struct path *path, int flags)
 	return dentry_open(path, flags | O_NOATIME, current_cred());
 }
 
-int ovl_copy_up_start(struct dentry *dentry)
+int ovl_copy_up_start(struct dentry *dentry, int flags)
 {
 	struct ovl_inode *oi = OVL_I(d_inode(dentry));
 	int err;
 
 	err = mutex_lock_interruptible(&oi->lock);
-	if (!err && ovl_already_copied_up(dentry)) {
+	if (!err && ovl_already_copied_up(dentry, flags)) {
 		err = 1; /* Already copied up */
 		mutex_unlock(&oi->lock);
 	}
@@ -368,7 +405,7 @@ bool ovl_check_origin_xattr(struct dentry *dentry)
 	return false;
 }
 
-bool ovl_already_copied_up(struct dentry *dentry)
+bool ovl_already_copied_up(struct dentry *dentry, int flags)
 {
 	/*
 	 * Check if copy-up has happened as well as for upper alias (in
@@ -384,7 +421,8 @@ bool ovl_already_copied_up(struct dentry *dentry)
 	 *      with rename.
 	 */
 	if (ovl_dentry_upper(dentry) &&
-	    ovl_dentry_has_upper_alias(dentry))
+	    ovl_dentry_has_upper_alias(dentry) &&
+	    !ovl_dentry_needs_data_copy_up(dentry, flags))
 		return true;
 
 	return false;
