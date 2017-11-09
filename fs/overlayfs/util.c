@@ -235,9 +235,6 @@ bool ovl_metaonly_copy_up(struct dentry *dentry, umode_t mode, int flags)
 {
 	struct ovl_fs *ofs = dentry->d_sb->s_fs_info;
 
-	/* TODO: Will enable metacopy in last patch of series */
-	return false;
-
 	if (!ofs->config.metacopy)
 		return false;
 
