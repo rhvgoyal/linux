@@ -443,6 +443,19 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 {
 	int err;
 
+	err = ovl_copy_xattr(c->lowerpath.dentry, temp);
+	if (err)
+		return err;
+
+	/*
+	 * Store identifier of lower inode in upper inode xattr to
+	 * allow lookup of the copy up origin inode.
+	 *
+	 */
+	err = ovl_set_origin(c->dentry, c->lowerpath.dentry, temp);
+	if (err)
+		return err;
+
 	if (S_ISREG(c->stat.mode)) {
 		struct path upperpath;
 
@@ -455,25 +468,11 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 			return err;
 	}
 
-	err = ovl_copy_xattr(c->lowerpath.dentry, temp);
-	if (err)
-		return err;
-
 	inode_lock(temp->d_inode);
 	err = ovl_set_attr(temp, &c->stat);
 	inode_unlock(temp->d_inode);
-	if (err)
-		return err;
 
-	/*
-	 * Store identifier of lower inode in upper inode xattr to
-	 * allow lookup of the copy up origin inode.
-	 */
-	err = ovl_set_origin(c->dentry, c->lowerpath.dentry, temp);
-	if (err)
-		return err;
-
-	return 0;
+	return err;
 }
 
 static int ovl_copy_up_locked(struct ovl_copy_up_ctx *c)
