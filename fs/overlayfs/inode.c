@@ -75,6 +75,15 @@ static void ovl_stat_set_encryption(struct kstat *ustat, struct kstat *lstat) {
 	ustat->attributes_mask |= STATX_ATTR_ENCRYPTED;
 }
 
+static void ovl_stat_set_compressed(struct kstat *ustat, struct kstat *lstat) {
+	if (!((lstat->attributes_mask & STATX_ATTR_COMPRESSED) &&
+	    (lstat->attributes & STATX_ATTR_COMPRESSED)))
+		return;
+
+	ustat->attributes |= STATX_ATTR_COMPRESSED;
+	ustat->attributes_mask |= STATX_ATTR_COMPRESSED;
+}
+
 
 int ovl_getattr(const struct path *path, struct kstat *stat,
 		u32 request_mask, unsigned int flags)
@@ -136,6 +145,7 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 			if (metacopy) {
 				stat->blocks = lowerstat.blocks;
 				ovl_stat_set_encryption(stat, &lowerstat);
+				ovl_stat_set_compressed(stat, &lowerstat);
 			}
 		}
 		if (samefs) {
