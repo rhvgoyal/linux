@@ -267,13 +267,26 @@ bool ovl_has_upperdata(struct dentry *dentry) {
 	if (!ovl_should_check_upperdata(dentry))
 		return true;
 
-	return ovl_test_flag(OVL_UPPERDATA, d_inode(dentry));
+	if (!ovl_test_flag(OVL_UPPERDATA, d_inode(dentry)))
+		return false;
+	/*
+	 * Pairs with smp_wmb() in ovl_copy_up_meta_inode_data(). Make sure
+	 * if setting of OVL_UPPERDATA is visible, then effects of writes
+	 * before that are visible too.
+	 */
+	smp_rmb();
+	return true;
 }
 
 void ovl_set_upperdata(struct dentry *dentry) {
 	if (!S_ISREG(d_inode(dentry)->i_mode))
 		return;
-
+	/*
+	 * Pairs with smp_rmb() in ovl_has_upperdata(). Make sure
+	 * if OVL_UPPERDATA flag is visible, then effects of write operations
+	 * before it are visible as well.
+	 */
+	smp_wmb();
 	ovl_set_flag(OVL_UPPERDATA, d_inode(dentry));
 }
 
