@@ -544,12 +544,16 @@ int ovl_set_nlink_lower(struct dentry *dentry)
 
 unsigned int ovl_get_nlink(struct dentry *lowerdentry,
 			   struct dentry *upperdentry,
+			   struct dentry *index,
 			   unsigned int fallback)
 {
 	int nlink_diff;
 	int nlink;
 	char buf[13];
 	int err;
+
+	if (!index)
+		return fallback;
 
 	if (!lowerdentry || !upperdentry || d_inode(lowerdentry)->i_nlink == 1)
 		return fallback;
@@ -670,7 +674,7 @@ struct inode *ovl_get_inode(struct dentry *dentry, struct dentry *upperdentry,
 			goto out;
 		}
 
-		nlink = ovl_get_nlink(lowerdentry, upperdentry,
+		nlink = ovl_get_nlink(lowerdentry, upperdentry, index,
 				      realinode->i_nlink);
 		set_nlink(inode, nlink);
 	} else {
