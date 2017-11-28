@@ -66,6 +66,23 @@ out:
 	return err;
 }
 
+#define OVL_STATX_ATTR_MASK	(STATX_ATTR_ENCRYPTED | STATX_ATTR_COMPRESSED)
+
+static void ovl_stat_fix_attributes(struct kstat *ustat, struct kstat *lstat) {
+	unsigned int attr_mask, attr;
+
+	attr_mask = lstat->attributes_mask & OVL_STATX_ATTR_MASK;
+	if (!attr_mask)
+		return;
+
+	attr = lstat->attributes & attr_mask;
+	if (!attr)
+		return;
+
+	ustat->attributes_mask |= attr_mask;
+	ustat->attributes |= attr;
+}
+
 int ovl_getattr(const struct path *path, struct kstat *stat,
 		u32 request_mask, unsigned int flags)
 {
@@ -123,8 +140,10 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 			else
 				stat->dev = ovl_get_pseudo_dev(dentry);
 
-			if (metacopy)
+			if (metacopy) {
 				stat->blocks = lowerstat.blocks;
+				ovl_stat_fix_attributes(stat, &lowerstat);
+			}
 		}
 		if (samefs) {
 			/*
