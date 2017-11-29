@@ -543,7 +543,7 @@ int ovl_set_nlink_lower(struct dentry *dentry)
 }
 
 unsigned int ovl_get_nlink(struct dentry *lowerdentry,
-			   struct dentry *upperdentry,
+			   struct dentry *index,
 			   unsigned int fallback)
 {
 	int nlink_diff;
@@ -551,10 +551,10 @@ unsigned int ovl_get_nlink(struct dentry *lowerdentry,
 	char buf[13];
 	int err;
 
-	if (!lowerdentry || !upperdentry || d_inode(lowerdentry)->i_nlink == 1)
+	if (!lowerdentry || !index || d_inode(lowerdentry)->i_nlink == 1)
 		return fallback;
 
-	err = vfs_getxattr(upperdentry, OVL_XATTR_NLINK, &buf, sizeof(buf) - 1);
+	err = vfs_getxattr(index, OVL_XATTR_NLINK, &buf, sizeof(buf) - 1);
 	if (err < 0)
 		goto fail;
 
@@ -567,7 +567,7 @@ unsigned int ovl_get_nlink(struct dentry *lowerdentry,
 	if (err < 0)
 		goto fail;
 
-	nlink = d_inode(buf[0] == 'L' ? lowerdentry : upperdentry)->i_nlink;
+	nlink = d_inode(buf[0] == 'L' ? lowerdentry : index)->i_nlink;
 	nlink += nlink_diff;
 
 	if (nlink <= 0)
@@ -577,7 +577,7 @@ unsigned int ovl_get_nlink(struct dentry *lowerdentry,
 
 fail:
 	pr_warn_ratelimited("overlayfs: failed to get index nlink (%pd2, err=%i)\n",
-			    upperdentry, err);
+			    index, err);
 	return fallback;
 }
 
@@ -670,8 +670,7 @@ struct inode *ovl_get_inode(struct dentry *dentry, struct dentry *upperdentry,
 			goto out;
 		}
 
-		nlink = ovl_get_nlink(lowerdentry, upperdentry,
-				      realinode->i_nlink);
+		nlink = ovl_get_nlink(lowerdentry, index, realinode->i_nlink);
 		set_nlink(inode, nlink);
 	} else {
 		inode = new_inode(dentry->d_sb);
