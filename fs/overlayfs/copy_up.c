@@ -195,6 +195,16 @@ out_fput:
 	return error;
 }
 
+static int ovl_set_size(struct dentry *upperdentry, struct kstat *stat)
+{
+	struct iattr attr = {
+		.ia_valid = ATTR_SIZE,
+		.ia_size = stat->size,
+	};
+
+	return notify_change(upperdentry, &attr, NULL);
+}
+
 static int ovl_set_timestamps(struct dentry *upperdentry, struct kstat *stat)
 {
 	struct iattr attr = {
@@ -490,8 +500,18 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 			return err;
 	}
 
+	if (c->metacopy) {
+		err = ovl_check_setxattr(c->dentry, temp, OVL_XATTR_METACOPY,
+					 NULL, 0, -EOPNOTSUPP);
+		if (err)
+			return err;
+	}
+
 	inode_lock(temp->d_inode);
-	err = ovl_set_attr(temp, &c->stat);
+	if (c->metacopy)
+		err = ovl_set_size(temp, &c->stat);
+	if (!err)
+		err = ovl_set_attr(temp, &c->stat);
 	inode_unlock(temp->d_inode);
 
 	return err;
@@ -523,6 +543,8 @@ static int ovl_copy_up_locked(struct ovl_copy_up_ctx *c)
 	if (err)
 		goto out_cleanup;
 
+	if (!c->metacopy)
+		ovl_set_upperdata(d_inode(c->dentry));
 	inode = d_inode(c->dentry);
 	ovl_inode_update(inode, newdentry);
 	if (S_ISDIR(inode->i_mode))
@@ -602,6 +624,28 @@ static int ovl_do_copy_up(struct ovl_copy_up_ctx *c)
 	return err;
 }
 
+/* Copy up data of an inode which was copied up metadata only in the past. */
+static int ovl_copy_up_meta_inode_data(struct ovl_copy_up_ctx *c)
+{
+	struct path upperpath;
+	int err;
+
+	ovl_path_upper(c->dentry, &upperpath);
+	if (WARN_ON(upperpath.dentry == NULL))
+		return -EIO;
+
+	err = ovl_copy_up_data(&c->lowerpath, &upperpath, c->stat.size);
+	if (err)
+		return err;
+
+	err = vfs_removexattr(upperpath.dentry, OVL_XATTR_METACOPY);
+	if (err)
+		return err;
+
+	ovl_set_upperdata(d_inode(c->dentry));
+	return err;
+}
+
 static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 			   int flags)
 {
@@ -645,7 +689,7 @@ static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 	}
 	ovl_do_check_copy_up(ctx.lowerpath.dentry);
 
-	err = ovl_copy_up_start(dentry);
+	err = ovl_copy_up_start(dentry, flags);
 	/* err < 0: interrupted, err > 0: raced with another copy-up */
 	if (unlikely(err)) {
 		if (err > 0)
@@ -655,6 +699,8 @@ static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 			err = ovl_do_copy_up(&ctx);
 		if (!err && !ovl_dentry_has_upper_alias(dentry))
 			err = ovl_link_up(&ctx);
+		if (!err && ovl_dentry_needs_data_copy_up_locked(dentry, flags))
+			err = ovl_copy_up_meta_inode_data(&ctx);
 		ovl_copy_up_end(dentry);
 	}
 	do_delayed_call(&done);
@@ -671,7 +717,7 @@ int ovl_copy_up_flags(struct dentry *dentry, int flags)
 		struct dentry *next;
 		struct dentry *parent;
 
-		if (ovl_already_copied_up(dentry))
+		if (ovl_already_copied_up(dentry, flags))
 			break;
 
 		next = dget(dentry);
@@ -698,13 +744,13 @@ int ovl_copy_up_flags(struct dentry *dentry, int flags)
 
 static bool ovl_open_need_copy_up(struct dentry *dentry, int flags)
 {
-	if (ovl_already_copied_up(dentry))
+	if (ovl_already_copied_up(dentry, flags))
 		return false;
 
 	if (special_file(d_inode(dentry)->i_mode))
 		return false;
 
-	if (!(OPEN_FMODE(flags) & FMODE_WRITE) && !(flags & O_TRUNC))
+	if (!ovl_open_flags_need_copy_up(flags))
 		return false;
 
 	return true;
