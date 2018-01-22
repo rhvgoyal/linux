@@ -175,6 +175,21 @@ struct dentry *ovl_dentry_lower(struct dentry *dentry)
 	return oe->numlower ? oe->lowerstack[0].dentry : NULL;
 }
 
+struct dentry *ovl_dentry_lowerdata(struct dentry *dentry)
+{
+	struct ovl_entry *oe = dentry->d_fsdata;
+	int i;
+
+	for(i = 0 ; i < oe->numlower; i++) {
+		if (oe->lowerstack[i].metacopy)
+			continue;
+
+		return oe->lowerstack[i].dentry;
+	}
+
+	return NULL;
+}
+
 struct dentry *ovl_dentry_real(struct dentry *dentry)
 {
 	return ovl_dentry_upper(dentry) ?: ovl_dentry_lower(dentry);
