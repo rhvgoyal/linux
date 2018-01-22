@@ -802,6 +802,24 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		}
 	}
 
+	if (origin_chain && !upperdentry && ctr && !d.is_dir) {
+		int nr_origins = 0;
+		struct ovl_path *stackptr = &stack[1];
+		/*
+		 * If upper is present, we already followed origin. If not,
+		 * follow origin now.
+		 */
+		i = ovl_find_layer(ofs, &stack[0]);
+		i++;
+		err = ovl_check_origin(stack[0].dentry, &roe->lowerstack[i],
+				       ofs->numlower - i, &stackptr,
+				       &nr_origins, true);
+		if (err)
+			goto out_put;
+
+		ctr += nr_origins;
+	}
+
 	oe = ovl_alloc_entry(ctr);
 	err = -ENOMEM;
 	if (!oe)
