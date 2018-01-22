@@ -28,6 +28,7 @@ struct ovl_layer {
 struct ovl_path {
 	struct ovl_layer *layer;
 	struct dentry *dentry;
+	bool metacopy;
 };
 
 /* private information held for overlayfs's superblock */

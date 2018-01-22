@@ -47,11 +47,36 @@ out:
 	return res;
 }
 
+static int ovl_check_origin_metacopy(struct ovl_path *stackp, unsigned int ctr)
+{
+	int i, metacopy;
+
+	if (!ctr)
+		return 0;
+
+	for (i = 0; i < ctr; i++) {
+		metacopy = ovl_check_metacopy_xattr(stackp[i].dentry);
+		if (metacopy <= 0)
+			return metacopy;
+		stackp[i].metacopy = true;
+	}
+
+	if (stackp[i - 1].metacopy) {
+		/*
+		 * Last origin should not have metacopy set. It should be
+		 * the source of metacopy. Something is wrong.
+		 */
+		return -EIO;
+	}
+
+	return 0;
+}
+
 /* err < 0, 0 if upper does not have metacopy, 1 if metacopy found */
 static int ovl_check_metacopy(struct ovl_fs *ofs, struct dentry *dentry,
-			      unsigned int ctr)
+			      struct ovl_path *stackp, unsigned int ctr)
 {
-	int metacopy;
+	int metacopy, err;
 
 	metacopy = ovl_check_metacopy_xattr(dentry);
 	if (metacopy <= 0 )
@@ -75,6 +100,9 @@ static int ovl_check_metacopy(struct ovl_fs *ofs, struct dentry *dentry,
 		return -EPERM;
 	}
 
+	err = ovl_check_origin_metacopy(stackp, ctr);
+	if (err)
+		return err;
 	return metacopy;
 }
 
@@ -347,8 +375,6 @@ static int ovl_check_origin(struct dentry *dentry,
 	int idx = 0;
 	bool mem_allocated = false;
 	struct ovl_path *origin_stack;
-
-	BUG_ON(*ctrp);
 
 	if (!*stackp) {
 		origin_stack = kmalloc(sizeof(struct ovl_path) * nr_path, GFP_KERNEL);
@@ -721,7 +747,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			if (err)
 				goto out_put_upper;
 
-			err = ovl_check_metacopy(ofs, upperdentry, ctr);
+			err = ovl_check_metacopy(ofs, upperdentry, stack, ctr);
 			metacopy = err;
 			if (err < 0)
 				goto out_put_upper;
@@ -818,6 +844,15 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			goto out_put;
 
 		ctr += nr_origins;
+
+		err = ovl_check_metacopy(ofs, stack[0].dentry, &stack[1],
+					 nr_origins);
+		metacopy = err;
+		if (err < 0)
+			goto out_put;
+
+		if (metacopy)
+			stack[0].metacopy = true;
 	}
 
 	oe = ovl_alloc_entry(ctr);
