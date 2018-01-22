@@ -283,39 +283,61 @@ static int ovl_lookup_layer(struct dentry *base, struct ovl_lookup_data *d,
 	return 0;
 }
 
-
-static int ovl_check_origin(struct dentry *upperdentry,
+static int ovl_check_origin(struct dentry *dentry,
 			    struct ovl_path *lower, unsigned int numlower,
-			    struct ovl_path **stackp, unsigned int *ctrp)
+			    struct ovl_path **stackp, unsigned int *ctrp,
+			    bool follow_chain)
 {
 	struct vfsmount *mnt;
 	struct dentry *origin = NULL;
-	int i;
+	int i, nr_path = (follow_chain ? numlower : 1), err = 0;
+	int idx = 0;
+	bool mem_allocated = false;
+	struct ovl_path *origin_stack;
+
+	BUG_ON(*ctrp);
+
+	if (!*stackp) {
+		origin_stack = kmalloc(sizeof(struct ovl_path) * nr_path, GFP_KERNEL);
+		if (!origin_stack)
+			return -ENOMEM;
+		mem_allocated = true;
+	} else
+		origin_stack = *stackp;
 
 	for (i = 0; i < numlower; i++) {
 		mnt = lower[i].layer->mnt;
-		origin = ovl_get_origin(upperdentry, mnt);
-		if (IS_ERR(origin))
-			return PTR_ERR(origin);
+		origin = ovl_get_origin(dentry, mnt);
+		if (IS_ERR(origin)) {
+			err = PTR_ERR(origin);
+			goto out_err;
+		}
 
-		if (origin)
-			break;
+		if (origin) {
+			origin_stack[idx++] = (struct ovl_path){.dentry = origin, .layer = lower[i].layer};
+			if (!follow_chain)
+				break;
+			else
+				dentry = origin;
+		}
 	}
 
-	if (!origin)
+	if (mem_allocated && !idx) {
+		kfree(origin_stack);
 		return 0;
-
-	BUG_ON(*ctrp);
-	if (!*stackp)
-		*stackp = kmalloc(sizeof(struct ovl_path), GFP_KERNEL);
-	if (!*stackp) {
-		dput(origin);
-		return -ENOMEM;
 	}
-	**stackp = (struct ovl_path){.dentry = origin, .layer = lower[i].layer};
-	*ctrp = 1;
 
+	*stackp = origin_stack;
+	*ctrp = idx;
 	return 0;
+out_err:
+	for (i = 0; i < idx; i++)
+		dput(origin_stack[i].dentry);
+
+	if (mem_allocated)
+		kfree(origin_stack);
+
+	return err;
 }
 
 /*
@@ -427,7 +449,7 @@ int ovl_verify_index(struct dentry *index, struct ovl_path *lower,
 	if (err)
 		goto fail;
 
-	err = ovl_check_origin(index, lower, numlower, &stack, &ctr);
+	err = ovl_check_origin(index, lower, numlower, &stack, &ctr, false);
 	if (!err && !ctr)
 		err = -ESTALE;
 	if (err)
@@ -602,6 +624,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 	struct dentry *this;
 	unsigned int i;
 	int err;
+	bool origin_chain = ofs->config.metacopy ? true : false;
 	struct ovl_lookup_data d = {
 		.name = dentry->d_name,
 		.is_dir = false,
@@ -639,7 +662,8 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			 * to a dentry in lower layer that was moved under us.
 			 */
 			err = ovl_check_origin(upperdentry, roe->lowerstack,
-					       roe->numlower, &stack, &ctr);
+					       roe->numlower, &stack, &ctr,
+					       origin_chain);
 			if (err)
 				goto out_put_upper;
 		}
