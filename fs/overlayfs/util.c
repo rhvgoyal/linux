@@ -132,6 +132,25 @@ void ovl_path_lower(struct dentry *dentry, struct path *path)
 	}
 }
 
+void ovl_path_lowerdata(struct dentry *dentry, struct path *path)
+{
+	struct ovl_entry *oe = dentry->d_fsdata;
+	int i;
+
+	if (!oe->numlower) {
+		*path = (struct path) { };
+		return;
+	}
+
+	for (i = 0 ; i < oe->numlower; i++) {
+		if (oe->lowerstack[i].metacopy)
+			continue;
+		path->mnt = oe->lowerstack[i].layer->mnt;
+		path->dentry = oe->lowerstack[i].dentry;
+		return;
+	}
+}
+
 enum ovl_path_type ovl_path_real(struct dentry *dentry, struct path *path)
 {
 	enum ovl_path_type type = ovl_path_type(dentry);
