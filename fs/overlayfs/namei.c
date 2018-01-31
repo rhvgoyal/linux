@@ -182,6 +182,60 @@ invalid:
 	goto out;
 }
 
+/* err < 0, 0 if no metacopy xattr, 1 if metacopy xattr found */
+static int ovl_check_metacopy_xattr(struct dentry *dentry)
+{
+	int res;
+
+	/* Only regular files can have metacopy xattr */
+	if (!S_ISREG(d_inode(dentry)->i_mode))
+		return 0;
+
+	res = vfs_getxattr(dentry, OVL_XATTR_METACOPY, NULL, 0);
+	if (res < 0) {
+		if (res == -ENODATA || res == -EOPNOTSUPP)
+			return 0;
+		goto out;
+	}
+
+	return 1;
+out:
+	pr_warn_ratelimited("overlayfs: failed to get metacopy (%i)\n", res);
+	return res;
+}
+
+static int ovl_check_metacopy(struct ovl_fs *ofs, struct dentry *dentry,
+			      unsigned int ctr)
+{
+	int metacopy;
+
+	metacopy = ovl_check_metacopy_xattr(dentry);
+	if (metacopy <= 0 )
+		return metacopy;
+
+	if (!ctr) {
+		/*
+		 * Found a upper dentry with metacopy set but at the same
+		 * time there is no corresponding origin dentry. Something
+		 * is not right.
+		 */
+		return -ESTALE;
+	}
+
+	if (!ofs->config.metacopy) {
+		/*
+		 * Do not follow metacopy origin if metacopy feature
+		 * is not enabled. This can be a security issue (Like
+		 * redirect).
+		 */
+		pr_warn_ratelimited("overlay: refusing to follow metacopy"
+				    " origin for (%pd2)\n", dentry);
+		return -EPERM;
+	}
+
+	return metacopy;
+}
+
 static bool ovl_is_opaquedir(struct dentry *dentry)
 {
 	return ovl_check_dir_xattr(dentry, OVL_XATTR_OPAQUE);
@@ -602,6 +656,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 	struct dentry *this;
 	unsigned int i;
 	int err;
+	bool metacopy = false;
 	struct ovl_lookup_data d = {
 		.name = dentry->d_name,
 		.is_dir = false,
@@ -641,6 +696,11 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			err = ovl_check_origin(upperdentry, roe->lowerstack,
 					       roe->numlower, &stack, &ctr);
 			if (err)
+				goto out_put_upper;
+
+			err = ovl_check_metacopy(ofs, upperdentry, ctr);
+			metacopy = err;
+			if (err < 0)
 				goto out_put_upper;
 		}
 
@@ -742,6 +802,9 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		OVL_I(inode)->redirect = upperredirect;
 		if (index)
 			ovl_set_flag(OVL_INDEX, inode);
+
+		if (upperdentry && !metacopy)
+			ovl_set_flag(OVL_UPPERDATA, inode);
 	}
 
 	revert_creds(old_cred);
