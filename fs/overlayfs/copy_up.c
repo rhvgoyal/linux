@@ -326,7 +326,6 @@ struct ovl_copy_up_ctx {
 	struct qstr destname;
 	struct dentry *workdir;
 	bool tmpfile;
-	bool origin;
 };
 
 static int ovl_link_up(struct ovl_copy_up_ctx *c)
@@ -469,15 +468,10 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 	/*
 	 * Store identifier of lower inode in upper inode xattr to
 	 * allow lookup of the copy up origin inode.
-	 *
-	 * Don't set origin when we are breaking the association with a lower
-	 * hard link.
 	 */
-	if (c->origin) {
-		err = ovl_set_origin(c->dentry, c->lowerpath.dentry, temp);
-		if (err)
-			return err;
-	}
+	err = ovl_set_origin(c->dentry, c->lowerpath.dentry, temp);
+	if (err)
+		return err;
 
 	return 0;
 }
@@ -541,9 +535,6 @@ static int ovl_do_copy_up(struct ovl_copy_up_ctx *c)
 	if (ovl_indexdir(c->dentry->d_sb) && !S_ISDIR(c->stat.mode) &&
 	    c->stat.nlink > 1)
 		indexed = true;
-
-	if (S_ISDIR(c->stat.mode) || c->stat.nlink == 1 || indexed)
-		c->origin = true;
 
 	if (indexed) {
 		c->destdir = ovl_indexdir(c->dentry->d_sb);
