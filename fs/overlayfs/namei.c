@@ -361,7 +361,8 @@ static int ovl_check_origin(struct dentry *upperdentry,
 
 	BUG_ON(*ctrp);
 	if (!*stackp)
-		*stackp = kmalloc(sizeof(struct ovl_path), GFP_KERNEL);
+		*stackp = kmalloc(sizeof(struct ovl_path) * numlower,
+				  GFP_KERNEL);
 	if (!*stackp) {
 		dput(origin);
 		return -ENOMEM;
