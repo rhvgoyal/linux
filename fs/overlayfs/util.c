@@ -106,7 +106,7 @@ enum ovl_path_type ovl_path_type(struct dentry *dentry)
 				type |= __OVL_PATH_MERGE;
 		}
 	} else {
-		if (oe->numlower > 1)
+		if (oe->numlower > 1 && d_is_dir(dentry))
 			type |= __OVL_PATH_MERGE;
 	}
 	return type;
