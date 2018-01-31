@@ -17,6 +17,7 @@ struct ovl_config {
 	bool redirect_follow;
 	const char *redirect_mode;
 	bool index;
+	bool metacopy;
 };
 
 struct ovl_layer {
