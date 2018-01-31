@@ -700,3 +700,19 @@ err:
 	pr_err("overlayfs: failed to lock workdir+upperdir\n");
 	return -EIO;
 }
+
+bool ovl_is_metacopy_dentry(struct dentry *dentry)
+{
+	struct ovl_entry *oe = dentry->d_fsdata;
+
+	if (!d_is_reg(dentry))
+		return false;
+
+	if (ovl_dentry_upper(dentry)) {
+		if (!ovl_has_upperdata(dentry))
+			return true;
+		return false;
+	}
+
+	return (oe->numlower > 1);
+}
