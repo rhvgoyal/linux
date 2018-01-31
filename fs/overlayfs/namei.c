@@ -205,7 +205,7 @@ out:
 }
 
 static int ovl_check_metacopy(struct ovl_fs *ofs, struct dentry *dentry,
-			      unsigned int ctr)
+			      unsigned int numlower, bool is_upper)
 {
 	int metacopy;
 
@@ -213,7 +213,7 @@ static int ovl_check_metacopy(struct ovl_fs *ofs, struct dentry *dentry,
 	if (metacopy <= 0 )
 		return metacopy;
 
-	if (!ctr) {
+	if (is_upper && !numlower) {
 		/*
 		 * Found a upper dentry with metacopy set but at the same
 		 * time there is no corresponding origin dentry. Something
@@ -234,6 +234,77 @@ static int ovl_check_metacopy(struct ovl_fs *ofs, struct dentry *dentry,
 	}
 
 	return metacopy;
+}
+
+/*
+ * Returns < 0 upon error, 0 if dentry does not have metacopy xattr, 1 if
+ * dentry has metacopy xattr.
+ */
+static int ovl_get_metacopy_chain(struct ovl_fs *ofs,
+			      struct dentry *upperdentry,
+			      struct ovl_path *lower, unsigned int numlower,
+			      struct ovl_path *stackp, unsigned int *ctrp)
+{
+	int metacopy = 0, i, err;
+	struct dentry *origin = NULL, *parent;
+	struct vfsmount *mnt;
+
+	if (upperdentry) {
+		metacopy = ovl_check_metacopy(ofs, upperdentry, *ctrp, true);
+		if (metacopy <= 0 )
+			return metacopy;
+	}
+
+	/*
+	 * Expecting one dentry in stackp[0] and lowest data will be installed
+	 * at stackp[1], if appropriate./
+	 */
+	BUG_ON(*ctrp != 1);
+	err = ovl_check_metacopy(ofs, stackp[0].dentry, *ctrp, false);
+	if (err < 0)
+		return err;
+
+	if (!err)
+		return metacopy;
+
+	parent = stackp[0].dentry;
+	dget(parent);
+
+	/* Get the data dentry corresponding to metacopy dentry */
+	for (i = 0; i < numlower; i++) {
+		mnt = lower[i].layer->mnt;
+		origin = ovl_get_origin(parent, mnt);
+		if (IS_ERR(origin)) {
+			dput(parent);
+			return PTR_ERR(origin);
+		}
+
+		if (origin) {
+			err = ovl_check_metacopy_xattr(origin);
+			if (err < 0) {
+				dput(parent);
+				dput(origin);
+				return err;
+			}
+
+			if (err) {
+				dput(parent);
+				parent = origin;
+				origin = NULL;
+				continue;
+			}
+			break;
+		}
+	}
+
+	dput(parent);
+	if (!origin)
+		return -ESTALE;
+
+	stackp[1].dentry = origin;
+	stackp[1].layer = lower[i].layer;
+	*ctrp += 1;
+	return 1;
 }
 
 static bool ovl_is_opaquedir(struct dentry *dentry)
@@ -699,7 +770,10 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 			if (err)
 				goto out_put_upper;
 
-			err = ovl_check_metacopy(ofs, upperdentry, ctr);
+			err = ovl_get_metacopy_chain(ofs, upperdentry,
+						     roe->lowerstack,
+						     roe->numlower, stack,
+						     &ctr);
 			metacopy = err;
 			if (err < 0)
 				goto out_put_upper;
