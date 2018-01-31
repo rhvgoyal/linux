@@ -854,6 +854,20 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		}
 	}
 
+	if (ofs->config.metacopy && !upperdentry && ctr && !d.is_dir) {
+		/*
+		 * If upper is present, we already followed origin. If not,
+		 * follow origin now.
+		 */
+		i = ovl_find_layer(ofs, &stack[0]);
+		i++;
+		err = ovl_get_metacopy_chain(ofs, NULL,
+					   &roe->lowerstack[i],
+					   ofs->numlower - i, stack, &ctr);
+		if (err < 0)
+			goto out_put;
+	}
+
 	oe = ovl_alloc_entry(ctr);
 	err = -ENOMEM;
 	if (!oe)
