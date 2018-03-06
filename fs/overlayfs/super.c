@@ -58,6 +58,11 @@ static void ovl_entry_stack_free(struct ovl_entry *oe)
 		dput(oe->lowerstack[i].dentry);
 }
 
+static bool ovl_metacopy_def = IS_ENABLED(CONFIG_OVERLAY_FS_METACOPY);
+module_param_named(metacopy, ovl_metacopy_def, bool, 0644);
+MODULE_PARM_DESC(ovl_metacopy_def,
+		 "Default to on or off for the metadata only copy up feature");
+
 static void ovl_dentry_release(struct dentry *dentry)
 {
 	struct ovl_entry *oe = dentry->d_fsdata;
@@ -350,6 +355,9 @@ static int ovl_show_options(struct seq_file *m, struct dentry *dentry)
 	if (ofs->config.nfs_export != ovl_nfs_export_def)
 		seq_printf(m, ",nfs_export=%s", ofs->config.nfs_export ?
 						"on" : "off");
+	if (ofs->config.metacopy != ovl_metacopy_def)
+		seq_printf(m, ",metacopy=%s",
+			   ofs->config.metacopy ? "on" : "off");
 	return 0;
 }
 
@@ -384,6 +392,8 @@ enum {
 	OPT_INDEX_OFF,
 	OPT_NFS_EXPORT_ON,
 	OPT_NFS_EXPORT_OFF,
+	OPT_METACOPY_ON,
+	OPT_METACOPY_OFF,
 	OPT_ERR,
 };
 
@@ -397,6 +407,8 @@ static const match_table_t ovl_tokens = {
 	{OPT_INDEX_OFF,			"index=off"},
 	{OPT_NFS_EXPORT_ON,		"nfs_export=on"},
 	{OPT_NFS_EXPORT_OFF,		"nfs_export=off"},
+	{OPT_METACOPY_ON,		"metacopy=on"},
+	{OPT_METACOPY_OFF,		"metacopy=off"},
 	{OPT_ERR,			NULL}
 };
 
@@ -509,6 +521,14 @@ static int ovl_parse_opt(char *opt, struct ovl_config *config)
 
 		case OPT_NFS_EXPORT_OFF:
 			config->nfs_export = false;
+			break;
+
+		case OPT_METACOPY_ON:
+			config->metacopy = true;
+			break;
+
+		case OPT_METACOPY_OFF:
+			config->metacopy = false;
 			break;
 
 		default:
@@ -993,7 +1013,8 @@ static int ovl_make_workdir(struct ovl_fs *ofs, struct path *workpath)
 	if (err) {
 		ofs->noxattr = true;
 		ofs->config.index = false;
-		pr_warn("overlayfs: upper fs does not support xattr, falling back to index=off.\n");
+		ofs->config.metacopy = false;
+		pr_warn("overlayfs: upper fs does not support xattr, falling back to index=off and metacopy=off.\n");
 		err = 0;
 	} else {
 		vfs_removexattr(ofs->workdir, OVL_XATTR_OPAQUE);
@@ -1012,6 +1033,11 @@ static int ovl_make_workdir(struct ovl_fs *ofs, struct path *workpath)
 		ofs->config.nfs_export = false;
 	}
 
+	/* metacopy feature with upper requires redirect_dir=on */
+	if (ofs->config.metacopy && !ofs->config.redirect_dir) {
+		pr_warn("overlayfs: metadata only copyup requires \"redirect_dir=on\", falling back to metacopy=off.\n");
+		ofs->config.metacopy = false;
+	}
 out:
 	mnt_drop_write(mnt);
 	return err;
@@ -1188,6 +1214,12 @@ static struct ovl_entry *ovl_get_lowerstack(struct super_block *sb,
 		ofs->config.nfs_export = false;
 	}
 
+	if (!ofs->config.upperdir && ofs->config.metacopy &&
+	    !ofs->config.redirect_follow) {
+		ofs->config.metacopy = false;
+		pr_warn("overlayfs: metadata only copyup requires \"redirect_dir=follow\" on non-upper mount, falling back to metacopy=off.\n");
+	}
+
 	err = -ENOMEM;
 	stack = kcalloc(stacklen, sizeof(struct path), GFP_KERNEL);
 	if (!stack)
@@ -1263,6 +1295,7 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 
 	ofs->config.index = ovl_index_def;
 	ofs->config.nfs_export = ovl_nfs_export_def;
+	ofs->config.metacopy = ovl_metacopy_def;
 	err = ovl_parse_opt((char *) data, &ofs->config);
 	if (err)
 		goto out_err;
@@ -1329,6 +1362,11 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 			pr_warn("overlayfs: NFS export requires an index dir, falling back to nfs_export=off.\n");
 			ofs->config.nfs_export = false;
 		}
+	}
+
+	if (ofs->config.metacopy && ofs->config.nfs_export) {
+		pr_warn("overlayfs: Metadata copy up requires NFS export disabled, falling back to metacopy=off.\n");
+		ofs->config.metacopy = false;
 	}
 
 	if (ofs->config.nfs_export)
