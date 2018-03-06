@@ -775,6 +775,15 @@ static int ovl_copy_up_meta_inode_data(struct ovl_copy_up_ctx *c)
 	if (err)
 		return err;
 
+	/*
+	 * A metacopy files does not need redirect xattr once data has
+	 * been copied up.
+	 */
+	err = vfs_removexattr(upperpath.dentry, OVL_XATTR_REDIRECT);
+	if (err && err != -ENODATA && err != -EOPNOTSUPP)
+		return err;
+
+	err = 0;
 	ovl_set_upperdata(d_inode(c->dentry));
 	return err;
 }
