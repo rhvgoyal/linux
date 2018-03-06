@@ -192,6 +192,9 @@ static struct dentry *ovl_obtain_alias(struct super_block *sb,
 	if (index)
 		ovl_set_flag(OVL_INDEX, inode);
 
+	if (upper)
+		ovl_set_flag(OVL_UPPERDATA, inode);
+
 	dentry = d_find_any_alias(inode);
 	if (!dentry) {
 		dentry = d_alloc_anon(inode->i_sb);
