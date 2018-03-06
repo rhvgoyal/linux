@@ -1048,9 +1048,11 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 			err = ovl_set_redirect(old, samedir);
 		else if (!old_opaque && ovl_type_merge(new->d_parent))
 			err = ovl_set_opaque_xerr(old, olddentry, -EXDEV);
-		if (err)
-			goto out_dput;
-	}
+	} else if (ovl_is_metacopy_dentry(old))
+			err = ovl_set_redirect(old, false);
+	if (err)
+		goto out_dput;
+
 	if (!overwrite && new_is_dir) {
 		if (ovl_type_merge_or_lower(new))
 			err = ovl_set_redirect(new, samedir);
@@ -1058,7 +1060,10 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 			err = ovl_set_opaque_xerr(new, newdentry, -EXDEV);
 		if (err)
 			goto out_dput;
-	}
+	} else if (!overwrite && ovl_is_metacopy_dentry(new))
+			err = ovl_set_redirect(new, false);
+	if (err)
+		goto out_dput;
 
 	err = ovl_do_rename(old_upperdir->d_inode, olddentry,
 			    new_upperdir->d_inode, newdentry, flags);
