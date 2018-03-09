@@ -220,6 +220,7 @@ static int ovl_lookup_single(struct dentry *base, struct ovl_lookup_data *d,
 {
 	struct dentry *this;
 	int err;
+	bool last_element = !post[0];
 
 	this = lookup_one_len_unlocked(name, base, namelen);
 	if (IS_ERR(this)) {
@@ -247,12 +248,15 @@ static int ovl_lookup_single(struct dentry *base, struct ovl_lookup_data *d,
 			goto put_and_out;
 		goto out;
 	}
-	d->is_dir = true;
+	if (last_element)
+		d->is_dir = true;
 	if (d->last)
 		goto out;
 
 	if (ovl_is_opaquedir(this)) {
-		d->stop = d->opaque = true;
+		d->stop = true;
+		if (last_element)
+			d->opaque = true;
 		goto out;
 	}
 	err = ovl_check_redirect(this, d, prelen, post);
