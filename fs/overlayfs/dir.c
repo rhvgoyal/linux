@@ -189,6 +189,7 @@ static void ovl_instantiate(struct dentry *dentry, struct inode *inode,
 	ovl_dentry_version_inc(dentry->d_parent, false);
 	ovl_dentry_set_upper_alias(dentry);
 	if (!hardlink) {
+		ovl_set_upperdata(inode);
 		ovl_inode_update(inode, newdentry);
 		ovl_copyattr(newdentry->d_inode, inode);
 	} else {
