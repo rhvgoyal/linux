@@ -892,7 +892,7 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 		      unsigned int flags)
 {
 	int err;
-	bool locked = false;
+	bool new_locked = false;
 	struct dentry *old_upperdir;
 	struct dentry *new_upperdir;
 	struct dentry *olddentry;
@@ -959,7 +959,7 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 		if (err)
 			goto out_drop_write;
 	} else {
-		err = ovl_nlink_start(new, &locked);
+		err = ovl_nlink_start(new, &new_locked);
 		if (err)
 			goto out_drop_write;
 	}
@@ -1087,7 +1087,7 @@ out_unlock:
 	unlock_rename(new_upperdir, old_upperdir);
 out_revert_creds:
 	revert_creds(old_cred);
-	ovl_nlink_end(new, locked);
+	ovl_nlink_end(new, new_locked);
 out_drop_write:
 	ovl_drop_write(old);
 out:
