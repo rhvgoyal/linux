@@ -694,6 +694,7 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 	bool bylower = ovl_hash_bylower(sb, upperdentry, lowerdentry, index);
 	bool is_dir, metacopy = false;
 	int err = -ENOMEM;
+	char *new_redirect = NULL;
 
 	if (!realinode)
 		realinode = d_inode(lowerdentry);
@@ -754,7 +755,18 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 	if (upperdentry && !metacopy)
 		ovl_set_flag(OVL_UPPERDATA, inode);
 
-	OVL_I(inode)->redirect = redirect;
+	if (!metacopy) {
+		OVL_I(inode)->redirect = redirect;
+		redirect = NULL;
+	} else if (upperdentry) {
+		new_redirect = ovl_get_redirect_xattr(upperdentry);
+		if (IS_ERR(new_redirect)) {
+			err = PTR_ERR(new_redirect);
+			goto out_err_inode;
+		}
+		OVL_I(inode)->redirect = new_redirect;
+		new_redirect = NULL;
+	}
 
 	/* Check for non-merge dir that may have whiteouts */
 	if (is_dir) {
@@ -764,11 +776,16 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 		}
 	}
 
+	kfree(redirect);
 	if (inode->i_state & I_NEW)
 		unlock_new_inode(inode);
 out:
 	return inode;
 
+out_err_inode:
+	if (inode->i_state & I_NEW)
+		unlock_new_inode(inode);
+	iput(inode);
 out_err:
 	inode = ERR_PTR(err);
 	goto out;
