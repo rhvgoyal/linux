@@ -47,8 +47,15 @@ static int ovl_check_redirect(struct dentry *dentry, struct ovl_lookup_data *d,
 		goto invalid;
 
 	res = vfs_getxattr(dentry, OVL_XATTR_REDIRECT, buf, res);
-	if (res < 0)
+	if (res < 0) {
+		/*
+		 * Redirect xattr can be removed if a parallel data
+		 * copy up took place.
+		 */
+		if (res == -ENODATA)
+			goto err_free;
 		goto fail;
+	}
 	if (res == 0)
 		goto invalid;
 	if (buf[0] == '/') {
