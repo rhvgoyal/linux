@@ -999,12 +999,10 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		if (ctr)
 			origin = stack[0].dentry;
 		inode = ovl_get_inode(dentry->d_sb, upperdentry, origin, index,
-				      ctr);
+				      ctr, upperredirect);
 		err = PTR_ERR(inode);
 		if (IS_ERR(inode))
 			goto out_free_oe;
-
-		OVL_I(inode)->redirect = upperredirect;
 	}
 
 	revert_creds(old_cred);
