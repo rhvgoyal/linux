@@ -709,21 +709,13 @@ int ovl_nlink_prep(struct dentry *dentry)
  * Operations that change overlay inode and upper inode nlink need to be
  * synchronized with copy up for persistent nlink accounting.
  */
-int ovl_nlink_start(struct dentry *dentry, bool *locked)
+int ovl_nlink_start_locked(struct dentry *dentry)
 {
-	struct ovl_inode *oi = OVL_I(d_inode(dentry));
 	const struct cred *old_cred;
 	int err;
 
-	if (!d_inode(dentry))
-		return 0;
-
-	err = mutex_lock_interruptible(&oi->lock);
-	if (err)
-		return err;
-
 	if (d_is_dir(dentry) || !ovl_test_flag(OVL_INDEX, d_inode(dentry)))
-		goto out;
+		return 0;
 
 	old_cred = ovl_override_creds(dentry->d_sb);
 	/*
@@ -734,8 +726,22 @@ int ovl_nlink_start(struct dentry *dentry, bool *locked)
 	 */
 	err = ovl_set_nlink_upper(dentry);
 	revert_creds(old_cred);
+	return err;
+}
 
-out:
+int ovl_nlink_start(struct dentry *dentry, bool *locked)
+{
+	struct ovl_inode *oi = OVL_I(d_inode(dentry));
+	int err;
+
+	if (!d_inode(dentry))
+		return 0;
+
+	err = mutex_lock_interruptible(&oi->lock);
+	if (err)
+		return err;
+
+	err = ovl_nlink_start_locked(dentry);
 	if (err)
 		mutex_unlock(&oi->lock);
 	else
@@ -744,18 +750,22 @@ out:
 	return err;
 }
 
+void ovl_nlink_end_locked(struct dentry *dentry)
+{
+	if (ovl_test_flag(OVL_INDEX, d_inode(dentry)) &&
+	    d_inode(dentry)->i_nlink == 0) {
+		const struct cred *old_cred;
+
+		old_cred = ovl_override_creds(dentry->d_sb);
+		ovl_cleanup_index(dentry);
+		revert_creds(old_cred);
+	}
+}
+
 void ovl_nlink_end(struct dentry *dentry, bool locked)
 {
 	if (locked) {
-		if (ovl_test_flag(OVL_INDEX, d_inode(dentry)) &&
-		    d_inode(dentry)->i_nlink == 0) {
-			const struct cred *old_cred;
-
-			old_cred = ovl_override_creds(dentry->d_sb);
-			ovl_cleanup_index(dentry);
-			revert_creds(old_cred);
-		}
-
+		ovl_nlink_end_locked(dentry);
 		mutex_unlock(&OVL_I(d_inode(dentry))->lock);
 	}
 }
