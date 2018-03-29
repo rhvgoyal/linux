@@ -675,15 +675,9 @@ fail:
 	goto out;
 }
 
-/*
- * Operations that change overlay inode and upper inode nlink need to be
- * synchronized with copy up for persistent nlink accounting.
- */
-int ovl_nlink_start(struct dentry *dentry, bool *locked)
+int ovl_nlink_prep(struct dentry *dentry)
 {
-	struct ovl_inode *oi = OVL_I(d_inode(dentry));
-	const struct cred *old_cred;
-	int err;
+	int err = 0;
 
 	if (!d_inode(dentry))
 		return 0;
@@ -707,6 +701,22 @@ int ovl_nlink_start(struct dentry *dentry, bool *locked)
 		if (err)
 			return err;
 	}
+
+	return err;
+}
+
+/*
+ * Operations that change overlay inode and upper inode nlink need to be
+ * synchronized with copy up for persistent nlink accounting.
+ */
+int ovl_nlink_start(struct dentry *dentry, bool *locked)
+{
+	struct ovl_inode *oi = OVL_I(d_inode(dentry));
+	const struct cred *old_cred;
+	int err;
+
+	if (!d_inode(dentry))
+		return 0;
 
 	err = mutex_lock_interruptible(&oi->lock);
 	if (err)

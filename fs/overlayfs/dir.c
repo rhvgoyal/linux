@@ -595,6 +595,10 @@ static int ovl_link(struct dentry *old, struct inode *newdir,
 	if (err)
 		goto out_drop_write;
 
+	err = ovl_nlink_prep(old);
+	if (err)
+		goto out_drop_write;
+
 	err = ovl_nlink_start(old, &locked);
 	if (err)
 		goto out_drop_write;
@@ -749,6 +753,10 @@ static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 		goto out;
 
 	err = ovl_copy_up(dentry->d_parent);
+	if (err)
+		goto out_drop_write;
+
+	err = ovl_nlink_prep(dentry);
 	if (err)
 		goto out_drop_write;
 
@@ -960,6 +968,12 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 		if (err)
 			goto out_drop_write;
 	} else {
+		err = ovl_nlink_prep(new);
+		if (err)
+			goto out_drop_write;
+	}
+
+	if (overwrite) {
 		err = ovl_nlink_start(new, &new_locked);
 		if (err)
 			goto out_drop_write;
