@@ -677,7 +677,7 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 	struct inode *realinode = upperdentry ? d_inode(upperdentry) : NULL;
 	struct inode *inode;
 	bool bylower = ovl_hash_bylower(sb, upperdentry, lowerdentry, index);
-	bool is_dir;
+	bool is_dir, metacopy = false;
 
 	if (!realinode)
 		realinode = d_inode(lowerdentry);
@@ -731,6 +731,10 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 
 	if (index)
 		ovl_set_flag(OVL_INDEX, inode);
+
+	metacopy = ovl_check_metacopy_xattr(upperdentry ?: lowerdentry);
+	if (upperdentry && !metacopy)
+		ovl_set_flag(OVL_UPPERDATA, inode);
 
 	OVL_I(inode)->redirect = redirect;
 
