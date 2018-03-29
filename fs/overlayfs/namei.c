@@ -839,7 +839,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 	struct dentry *this;
 	unsigned int i;
 	int err;
-	bool metacopy = false;
+	bool metacopy = false, metacopydata = false;
 	struct ovl_lookup_data d = {
 		.name = dentry->d_name,
 		.is_dir = false,
@@ -958,6 +958,8 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 
 		if (d.metacopy)
 			metacopy = true;
+		else
+			metacopydata = true;
 		/*
 		 * Do not store intermediate metacopy dentries in chain,
 		 * except top most lower metacopy dentry
@@ -1000,14 +1002,6 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 
 	if (metacopy) {
 		BUG_ON(d.is_dir);
-		/*
-		 * Found a metacopy dentry but did not find corresponding
-		 * data dentry
-		 */
-		if (d.metacopy) {
-			err = -ESTALE;
-			goto out_put;
-		}
 
 		err = -EPERM;
 		if (!ofs->config.metacopy) {
@@ -1065,7 +1059,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		if (ctr)
 			origin = stack[0].dentry;
 		inode = ovl_get_inode(dentry->d_sb, upperdentry, origin, index,
-				      ctr, upperredirect);
+				      ctr, upperredirect, metacopydata);
 		err = PTR_ERR(inode);
 		if (IS_ERR(inode))
 			goto out_free_oe;

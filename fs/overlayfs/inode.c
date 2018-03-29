@@ -685,9 +685,42 @@ static bool ovl_hash_bylower(struct super_block *sb, struct dentry *upper,
 	return true;
 }
 
+static bool ovl_verify_metacopy_data(struct super_block *sb,
+				     struct inode *inode, bool metacopydata)
+{
+	struct ovl_fs *ofs = sb->s_fs_info;
+	struct ovl_inode *oi = OVL_I(inode);
+	bool metacopy = false;
+
+	/* A metacopy data dentry was found. So no need to do further checks */
+	if (metacopydata)
+		return true;
+
+	/*
+	 * Metacopy feature not enabled. No metadata data copy up should take
+	 * place. So no further checks needed.
+	 */
+	if (!ofs->config.metacopy)
+		return true;
+
+	if (!S_ISREG(inode->i_mode))
+		return true;
+
+	/*
+	 * Metacopy feature is enabled and we have not found metacopy data
+	 * dentry. Make sure this inode is not metacopy inode.
+	 */
+	mutex_lock(&oi->lock);
+	metacopy = !ovl_test_flag(OVL_UPPERDATA, inode);
+	mutex_unlock(&oi->lock);
+
+	return !metacopy;
+}
+
 struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 			    struct dentry *lowerdentry, struct dentry *index,
-			    unsigned int numlower, char *redirect)
+			    unsigned int numlower, char *redirect,
+			    bool metacopydata)
 {
 	struct inode *realinode = upperdentry ? d_inode(upperdentry) : NULL;
 	struct inode *inode;
@@ -725,6 +758,15 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 				goto out_err;
 			}
 
+			/* Verify data dentry was found for metacopy dentry */
+			if (upperdentry &&
+			    !ovl_verify_metacopy_data(sb, inode,
+				                      metacopydata)) {
+				iput(inode);
+				inode = ERR_PTR(-ESTALE);
+				goto out;
+			}
+
 			dput(upperdentry);
 			kfree(redirect);
 			goto out;
@@ -754,6 +796,11 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 	metacopy = ovl_check_metacopy_xattr(upperdentry ?: lowerdentry);
 	if (upperdentry && !metacopy)
 		ovl_set_flag(OVL_UPPERDATA, inode);
+
+	if (upperdentry && metacopy && !metacopydata) {
+		err = -ESTALE;
+		goto out_err_inode;
+	}
 
 	if (!metacopy) {
 		OVL_I(inode)->redirect = redirect;

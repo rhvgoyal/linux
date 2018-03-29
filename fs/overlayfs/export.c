@@ -305,7 +305,8 @@ static struct dentry *ovl_obtain_alias(struct super_block *sb,
 	if (d_is_dir(upper ?: lower))
 		return ERR_PTR(-EIO);
 
-	inode = ovl_get_inode(sb, dget(upper), lower, index, !!lower, NULL);
+	inode = ovl_get_inode(sb, dget(upper), lower, index, !!lower, NULL,
+			      false);
 	if (IS_ERR(inode)) {
 		dput(upper);
 		return ERR_CAST(inode);
