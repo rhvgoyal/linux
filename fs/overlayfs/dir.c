@@ -968,6 +968,27 @@ static void ovl_rename_unlock_ovl_inodes(struct dentry *old, struct dentry *new,
 		mutex_unlock(&OVL_I(d_inode(new))->lock);
 }
 
+static bool ovl_relative_redirect(struct dentry *dentry, bool samedir)
+{
+	if (d_is_dir(dentry))
+		return samedir;
+
+	/*
+	 * For non-dir hardlinked files, we need absolute redirects
+	 * in general as two upper hardlinks could be in different
+	 * dirs. We could put a relative redirect now and convert
+	 * it to absolute redirect later. But when nlink > 1 and
+	 * indexing is on, that means relative redirect needs to be
+	 * converted to absolute during copy up of another lower
+	 * hardllink as well.
+	 *
+	 * So without optimizing too much, just check if non-dir
+	 * has nlink > 1 or not. If yes, set absolute redirect to
+	 * begin with.
+	 */
+	return (d_inode(dentry)->i_nlink > 1 ? false : samedir);
+}
+
 static int ovl_rename(struct inode *olddir, struct dentry *old,
 		      struct inode *newdir, struct dentry *new,
 		      unsigned int flags)
@@ -1131,22 +1152,25 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 		goto out_dput;
 
 	err = 0;
-	if (is_dir) {
-		if (ovl_type_merge_or_lower(old))
-			err = ovl_set_redirect(old, samedir);
-		else if (!old_opaque && ovl_type_merge(new->d_parent))
-			err = ovl_set_opaque_xerr(old, olddentry, -EXDEV);
-		if (err)
-			goto out_dput;
-	}
-	if (!overwrite && new_is_dir) {
+	if (ovl_type_merge_or_lower(old))
+		err = ovl_set_redirect(old,
+				       ovl_relative_redirect(old, samedir));
+	else if (is_dir && !old_opaque && ovl_type_merge(new->d_parent))
+		err = ovl_set_opaque_xerr(old, olddentry, -EXDEV);
+
+	if (err)
+		goto out_dput;
+
+	if (!overwrite) {
 		if (ovl_type_merge_or_lower(new))
-			err = ovl_set_redirect(new, samedir);
-		else if (!new_opaque && ovl_type_merge(old->d_parent))
+			err = ovl_set_redirect(new, ovl_relative_redirect(new,
+					       samedir));
+		else if (new_is_dir && !new_opaque &&
+			 ovl_type_merge(old->d_parent))
 			err = ovl_set_opaque_xerr(new, newdentry, -EXDEV);
-		if (err)
-			goto out_dput;
 	}
+	if (err)
+		goto out_dput;
 
 	err = ovl_do_rename(old_upperdir->d_inode, olddentry,
 			    new_upperdir->d_inode, newdentry, flags);
