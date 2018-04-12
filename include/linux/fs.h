@@ -1809,6 +1809,9 @@ extern int vfs_dedupe_file_range_compare(struct inode *src, loff_t srcoff,
 					 loff_t len, bool *is_same);
 extern int vfs_dedupe_file_range(struct file *file,
 				 struct file_dedupe_range *same);
+extern ssize_t vfs_dedupe_file_range_one(struct file *src_file, u64 src_pos,
+					 u64 len, struct file *dst_file,
+					 u64 dst_pos);
 
 struct super_operations {
    	struct inode *(*alloc_inode)(struct super_block *sb);
