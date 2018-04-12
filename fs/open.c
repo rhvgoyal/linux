@@ -866,6 +866,33 @@ int vfs_open(const struct path *path, struct file *file,
 	return do_dentry_open(file, d_backing_inode(dentry), NULL, cred);
 }
 
+struct file *path_open(const struct path *path, int flags, struct inode *inode,
+		       const struct cred *cred)
+{
+	struct file *file;
+	int retval;
+
+	file = get_empty_filp();
+	if (!IS_ERR(file)) {
+		file->f_flags = flags;
+		file->f_path = *path;
+		retval = do_dentry_open(file, inode, NULL, cred);
+		if (retval) {
+			put_filp(file);
+			file = ERR_PTR(retval);
+		} else {
+			retval = open_check_o_direct(file);
+			if (retval) {
+				fput(file);
+				file = ERR_PTR(retval);
+			}
+		}
+	}
+
+	return file;
+}
+EXPORT_SYMBOL(path_open);
+
 struct file *dentry_open(const struct path *path, int flags,
 			 const struct cred *cred)
 {
