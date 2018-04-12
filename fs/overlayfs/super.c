@@ -80,64 +80,29 @@ static void ovl_dentry_release(struct dentry *dentry)
 	}
 }
 
-static int ovl_check_append_only(struct inode *inode, int flag)
-{
-	/*
-	 * This test was moot in vfs may_open() because overlay inode does
-	 * not have the S_APPEND flag, so re-check on real upper inode
-	 */
-	if (IS_APPEND(inode)) {
-		if  ((flag & O_ACCMODE) != O_RDONLY && !(flag & O_APPEND))
-			return -EPERM;
-		if (flag & O_TRUNC)
-			return -EPERM;
-	}
-
-	return 0;
-}
-
 static struct dentry *ovl_d_real(struct dentry *dentry,
-				 const struct inode *inode,
-				 unsigned int open_flags)
+				 const struct inode *inode)
 {
 	struct dentry *real;
-	int err;
 
-	/* It's an overlay file */
-	if (inode && d_inode(dentry) == inode)
+	if (WARN_ON(!inode))
 		return dentry;
 
-	if (!d_is_reg(dentry)) {
-		if (!inode || inode == d_inode(dentry))
-			return dentry;
+	/* It's an overlay file */
+	if (d_inode(dentry) == inode)
+		return dentry;
+
+	if (!d_is_reg(dentry))
 		goto bug;
-	}
 
-	if (open_flags) {
-		err = ovl_open_maybe_copy_up(dentry, open_flags);
-		if (err)
-			return ERR_PTR(err);
-	}
-
-	real = ovl_dentry_upper(dentry);
-	if (real && (!inode || inode == d_inode(real))) {
-		if (!inode) {
-			err = ovl_check_append_only(d_inode(real), open_flags);
-			if (err)
-				return ERR_PTR(err);
-		}
+	real = ovl_dentry_real(dentry);
+	if (inode == d_inode(real))
 		return real;
-	}
-
-	real = ovl_dentry_lower(dentry);
-	if (!real)
-		goto bug;
 
 	/* Handle recursion */
-	real = d_real(real, inode, open_flags);
+	if (unlikely(real->d_flags & DCACHE_OP_REAL))
+		return real->d_op->d_real(real, inode);
 
-	if (!inode || inode == d_inode(real))
-		return real;
 bug:
 	WARN(1, "ovl_d_real(%pd4, %s:%lu): real dentry not found\n", dentry,
 	     inode ? inode->i_sb->s_id : "NULL", inode ? inode->i_ino : 0);

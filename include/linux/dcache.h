@@ -147,8 +147,7 @@ struct dentry_operations {
 	char *(*d_dname)(struct dentry *, char *, int);
 	struct vfsmount *(*d_automount)(struct path *);
 	int (*d_manage)(const struct path *, bool);
-	struct dentry *(*d_real)(struct dentry *, const struct inode *,
-				 unsigned int);
+	struct dentry *(*d_real)(struct dentry *, const struct inode *);
 } ____cacheline_aligned;
 
 /*
@@ -563,27 +562,6 @@ static inline struct inode *d_backing_inode(const struct dentry *upper)
 static inline struct dentry *d_backing_dentry(struct dentry *upper)
 {
 	return upper;
-}
-
-/**
- * d_real - Return the real dentry
- * @dentry: the dentry to query
- * @inode: inode to select the dentry from multiple layers (can be NULL)
- * @flags: open flags to control copy-up behavior
- *
- * If dentry is on a union/overlay, then return the underlying, real dentry.
- * Otherwise return the dentry itself.
- *
- * See also: Documentation/filesystems/vfs.txt
- */
-static inline struct dentry *d_real(struct dentry *dentry,
-				    const struct inode *inode,
-				    unsigned int flags)
-{
-	if (unlikely(dentry->d_flags & DCACHE_OP_REAL))
-		return dentry->d_op->d_real(dentry, inode, flags);
-	else
-		return dentry;
 }
 
 struct name_snapshot {
