@@ -675,3 +675,22 @@ err:
 	pr_err("overlayfs: failed to lock workdir+upperdir\n");
 	return -EIO;
 }
+
+void ovl_copytimes(struct inode *inode)
+{
+	struct inode *upperinode;
+
+	if (!inode)
+		return;
+
+	upperinode = ovl_inode_upper(inode);
+
+	if (!upperinode)
+		return;
+
+	if ((!timespec_equal(&inode->i_mtime, &upperinode->i_mtime) ||
+	     !timespec_equal(&inode->i_ctime, &upperinode->i_ctime))) {
+		inode->i_mtime = upperinode->i_mtime;
+		inode->i_ctime = upperinode->i_ctime;
+	}
+}

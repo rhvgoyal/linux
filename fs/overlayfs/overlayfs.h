@@ -258,6 +258,13 @@ bool ovl_need_index(struct dentry *dentry);
 int ovl_nlink_start(struct dentry *dentry, bool *locked);
 void ovl_nlink_end(struct dentry *dentry, bool locked);
 int ovl_lock_rename_workdir(struct dentry *workdir, struct dentry *upperdir);
+void ovl_copytimes(struct inode *inode);
+
+static inline void ovl_copytimes_with_parent(struct dentry *dentry)
+{
+	ovl_copytimes(d_inode(dentry));
+	ovl_copytimes(d_inode(dentry->d_parent));
+}
 
 static inline bool ovl_is_impuredir(struct dentry *dentry)
 {

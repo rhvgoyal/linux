@@ -303,6 +303,7 @@ int ovl_xattr_set(struct dentry *dentry, struct inode *inode, const char *name,
 		err = vfs_removexattr(realdentry, name);
 	}
 	revert_creds(old_cred);
+	ovl_copytimes(d_inode(dentry));
 
 out_drop_write:
 	ovl_drop_write(dentry);

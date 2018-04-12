@@ -507,6 +507,7 @@ static int ovl_create_or_link(struct dentry *dentry, struct inode *inode,
 		else
 			err = ovl_create_over_whiteout(dentry, inode, attr,
 							hardlink);
+		ovl_copytimes_with_parent(dentry);
 	}
 out_revert_creds:
 	revert_creds(old_cred);
@@ -768,6 +769,7 @@ static int ovl_do_remove(struct dentry *dentry, bool is_dir)
 			drop_nlink(dentry->d_inode);
 	}
 	ovl_nlink_end(dentry, locked);
+	ovl_copytimes_with_parent(dentry);
 out_drop_write:
 	ovl_drop_write(dentry);
 out:
@@ -1078,6 +1080,9 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 			       (!overwrite && ovl_type_origin(new)));
 	ovl_dentry_version_inc(new->d_parent, ovl_type_origin(old) ||
 			       (d_inode(new) && ovl_type_origin(new)));
+
+	ovl_copytimes_with_parent(old);
+	ovl_copytimes_with_parent(new);
 
 out_dput:
 	dput(newdentry);
