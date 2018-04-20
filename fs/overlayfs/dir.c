@@ -888,6 +888,30 @@ static int ovl_set_redirect(struct dentry *dentry, bool samedir)
 	return err;
 }
 
+static bool ovl_relative_redirect(struct dentry *dentry, bool samedir)
+{
+	struct dentry *lowerdentry;
+
+	if (d_is_dir(dentry) || !samedir)
+		return samedir;
+
+	/*
+	 * For non-dir hardlinked files, we need absolute redirects
+	 * in general as two upper hardlinks could be in different
+	 * dirs. We could put a relative redirect now and convert
+	 * it to absolute redirect later. But when nlink > 1 and
+	 * indexing is on, that means relative redirect needs to be
+	 * converted to absolute during copy up of another lower
+	 * hardllink as well.
+	 *
+	 * So without optimizing too much, just check if lower is
+	 * a hard link or not. If lower is hard link, put absolute
+	 * redirect.
+	 */
+	lowerdentry = ovl_dentry_lower(dentry);
+	return (d_inode(lowerdentry)->i_nlink > 1 ? false : true);
+}
+
 static int ovl_rename(struct inode *olddir, struct dentry *old,
 		      struct inode *newdir, struct dentry *new,
 		      unsigned int flags)
@@ -999,15 +1023,15 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 		}
 	}
 
-	if (is_dir && ovl_type_merge_or_lower(old)) {
-		err = ovl_set_redirect(old, samedir);
+	if (ovl_type_merge_or_lower(old)) {
+		err = ovl_set_redirect(old, ovl_relative_redirect(old, samedir));
 		if (err)
 			goto out_revert_creds;
 		old_redirect = true;
 	}
 
-	if (!overwrite && new_is_dir && ovl_type_merge_or_lower(new)) {
-		err = ovl_set_redirect(new, samedir);
+	if (!overwrite && ovl_type_merge_or_lower(new)) {
+		err = ovl_set_redirect(new, ovl_relative_redirect(new, samedir));
 		if (err)
 			goto out_revert_creds;
 		new_redirect = true;
