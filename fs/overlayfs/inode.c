@@ -817,6 +817,9 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 
 	OVL_I(inode)->redirect = redirect;
 
+	if (bylower)
+		ovl_set_flag(OVL_CONST_INO, inode);
+
 	/* Check for non-merge dir that may have whiteouts */
 	if (is_dir) {
 		if (((upperdentry && lowerdentry) || numlower > 1) ||
