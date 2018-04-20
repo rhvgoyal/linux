@@ -908,6 +908,7 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 	struct dentry *opaquedir = NULL;
 	const struct cred *old_cred = NULL;
 	LIST_HEAD(list);
+	bool old_redirect = false, new_redirect = false;
 
 	err = -EINVAL;
 	if (flags & ~(RENAME_EXCHANGE | RENAME_NOREPLACE))
@@ -997,6 +998,20 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 		}
 	}
 
+	if (is_dir && ovl_type_merge_or_lower(old)) {
+		err = ovl_set_redirect(old, samedir);
+		if (err)
+			goto out_revert_creds;
+		old_redirect = true;
+	}
+
+	if (!overwrite && new_is_dir && ovl_type_merge_or_lower(new)) {
+		err = ovl_set_redirect(new, samedir);
+		if (err)
+			goto out_revert_creds;
+		new_redirect = true;
+	}
+
 	trap = lock_rename(new_upperdir, old_upperdir);
 
 	olddentry = lookup_one_len(old->d_name.name, old_upperdir,
@@ -1042,18 +1057,14 @@ static int ovl_rename(struct inode *olddir, struct dentry *old,
 		goto out_dput;
 
 	err = 0;
-	if (is_dir) {
-		if (ovl_type_merge_or_lower(old))
-			err = ovl_set_redirect(old, samedir);
-		else if (!old_opaque && ovl_type_merge(new->d_parent))
+	if (is_dir && !old_redirect) {
+		if (!old_opaque && ovl_type_merge(new->d_parent))
 			err = ovl_set_opaque_xerr(old, olddentry, -EXDEV);
 		if (err)
 			goto out_dput;
 	}
-	if (!overwrite && new_is_dir) {
-		if (ovl_type_merge_or_lower(new))
-			err = ovl_set_redirect(new, samedir);
-		else if (!new_opaque && ovl_type_merge(old->d_parent))
+	if (!overwrite && new_is_dir && !new_redirect) {
+		if (!new_opaque && ovl_type_merge(old->d_parent))
 			err = ovl_set_opaque_xerr(new, newdentry, -EXDEV);
 		if (err)
 			goto out_dput;
