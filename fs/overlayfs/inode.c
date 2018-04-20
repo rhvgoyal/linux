@@ -133,6 +133,9 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 	bool samefs = ovl_same_sb(dentry->d_sb);
 	struct ovl_layer *lower_layer = NULL;
 	int err;
+	bool metacopy = false;
+
+	metacopy = ovl_is_metacopy_dentry(dentry);
 
 	type = ovl_path_real(dentry, &realpath);
 	old_cred = ovl_override_creds(dentry->d_sb);
@@ -154,7 +157,8 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 			lower_layer = ovl_layer_lower(dentry);
 		} else if (OVL_TYPE_ORIGIN(type)) {
 			struct kstat lowerstat;
-			u32 lowermask = STATX_INO | (!is_dir ? STATX_NLINK : 0);
+			u32 lowermask = STATX_INO | STATX_BLOCKS |
+					(!is_dir ? STATX_NLINK : 0);
 
 			ovl_path_lower(dentry, &realpath);
 			err = vfs_getattr(&realpath, &lowerstat,
@@ -183,6 +187,22 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 				stat->ino = lowerstat.ino;
 				lower_layer = ovl_layer_lower(dentry);
 			}
+		}
+
+		if (metacopy) {
+			/*
+			 * TODO: This additional vfs_getattr() can be
+			 * avoided for some cases when lower = lowerdata
+			 */
+			struct kstat lowerdatastat;
+			u32 lowermask = STATX_BLOCKS;
+
+			ovl_path_lowerdata(dentry, &realpath);
+			err = vfs_getattr(&realpath, &lowerdatastat,
+					  lowermask, flags);
+			if (err)
+				goto out;
+			stat->blocks = lowerdatastat.blocks;
 		}
 	}
 
