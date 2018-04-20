@@ -134,7 +134,7 @@ enum ovl_path_type ovl_path_type(struct dentry *dentry)
 		 */
 		if (oe->numlower) {
 			type |= __OVL_PATH_ORIGIN;
-			if (d_is_dir(dentry))
+			if (d_is_dir(dentry) || !ovl_has_upperdata(dentry))
 				type |= __OVL_PATH_MERGE;
 		}
 	} else {
