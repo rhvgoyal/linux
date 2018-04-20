@@ -1005,17 +1005,10 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 
 	if (upperdentry || ctr) {
 		inode = ovl_get_inode(dentry->d_sb, upperdentry, stack, index,
-				      ctr);
+				      ctr, upperredirect);
 		err = PTR_ERR(inode);
 		if (IS_ERR(inode))
 			goto out_free_oe;
-
-		/*
-		 * NB: handle redirected hard links when non-dir redirects
-		 * become possible
-		 */
-		WARN_ON(OVL_I(inode)->redirect);
-		OVL_I(inode)->redirect = upperredirect;
 	}
 
 	revert_creds(old_cred);
