@@ -802,7 +802,8 @@ static bool ovl_hash_bylower(struct super_block *sb, struct dentry *upper,
 
 struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 			    struct ovl_path *lowerpath, struct dentry *index,
-			    unsigned int numlower, char *redirect)
+			    unsigned int numlower, char *redirect,
+			    struct dentry *lowerdata)
 {
 	struct inode *realinode = upperdentry ? d_inode(upperdentry) : NULL;
 	struct inode *inode;
@@ -861,7 +862,7 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 		}
 	}
 	ovl_fill_inode(inode, realinode->i_mode, realinode->i_rdev, ino, fsid);
-	ovl_inode_init(inode, upperdentry, lowerdentry);
+	ovl_inode_init(inode, upperdentry, lowerdentry, lowerdata);
 
 	if (upperdentry && ovl_is_impuredir(upperdentry))
 		ovl_set_flag(OVL_IMPURE, inode);

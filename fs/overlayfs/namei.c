@@ -1070,8 +1070,11 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		upperdentry = dget(index);
 
 	if (upperdentry || ctr) {
+		struct dentry *lowerdata = NULL;
+		if (ctr > 1 && !d.is_dir)
+			lowerdata = stack[ctr - 1].dentry;
 		inode = ovl_get_inode(dentry->d_sb, upperdentry, stack, index,
-				      ctr, upperredirect);
+				      ctr, upperredirect, lowerdata);
 		err = PTR_ERR(inode);
 		if (IS_ERR(inode))
 			goto out_free_oe;
