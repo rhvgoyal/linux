@@ -801,7 +801,7 @@ static bool ovl_hash_bylower(struct super_block *sb, struct dentry *upper,
 
 struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 			    struct ovl_path *lowerpath, struct dentry *index,
-			    unsigned int numlower)
+			    unsigned int numlower, char *redirect)
 {
 	struct inode *realinode = upperdentry ? d_inode(upperdentry) : NULL;
 	struct inode *inode;
@@ -841,6 +841,7 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 			}
 
 			dput(upperdentry);
+			kfree(redirect);
 			goto out;
 		}
 
@@ -863,6 +864,8 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 
 	if (index)
 		ovl_set_flag(OVL_INDEX, inode);
+
+	OVL_I(inode)->redirect = redirect;
 
 	/* Check for non-merge dir that may have whiteouts */
 	if (is_dir) {
