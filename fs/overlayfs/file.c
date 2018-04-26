@@ -18,9 +18,16 @@ static struct file *ovl_open_realfile(const struct file *file)
 {
 	struct inode *inode = file_inode(file);
 	struct inode *upperinode = ovl_inode_upper(inode);
-	struct inode *realinode = upperinode ?: ovl_inode_lower(inode);
+	struct inode *realinode;
 	struct file *realfile;
+	bool upperreal = false;
 	const struct cred *old_cred;
+
+	if (upperinode && ovl_has_upperdata(inode))
+		upperreal = true;
+
+	/* Always open file which contains data. Do not open metacopy. */
+	realinode = upperreal ? upperinode : ovl_inode_lowerdata(inode);
 
 	old_cred = ovl_override_creds(inode->i_sb);
 	realfile = path_open(&file->f_path, file->f_flags | O_NOATIME,
@@ -28,8 +35,9 @@ static struct file *ovl_open_realfile(const struct file *file)
 	revert_creds(old_cred);
 
 	pr_debug("open(%p[%pD2/%c], 0%o) -> (%p, 0%o)\n",
-		 file, file, upperinode ? 'u' : 'l', file->f_flags,
-		 realfile, IS_ERR(realfile) ? 0 : realfile->f_flags);
+		 file, file, upperreal ? 'u' : 'l',
+		 file->f_flags, realfile,
+		 IS_ERR(realfile) ? 0 : realfile->f_flags);
 
 	return realfile;
 }
@@ -80,7 +88,7 @@ static int ovl_real_file(const struct file *file, struct fd *real)
 	real->file = file->private_data;
 
 	/* Has it been copied up since we'd opened it? */
-	if (unlikely(file_inode(real->file) != ovl_inode_real(inode))) {
+	if (unlikely(file_inode(real->file) != ovl_inode_real_data(inode))) {
 		real->flags = FDPUT_FPUT;
 		real->file = ovl_open_realfile(file);
 
