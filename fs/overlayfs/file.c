@@ -259,18 +259,31 @@ out_unlock:
 
 static int ovl_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
-	struct fd real;
+	struct fd real, metareal = {0};
 	const struct cred *old_cred;
 	int ret;
+	struct inode *upperinode = NULL;
 
 	ret = ovl_real_file(file, &real);
 	if (ret)
 		return ret;
 
+	/* If we have upper metacopy, issue additional fsync on it */
+	upperinode = ovl_inode_upper(file_inode(file));
+	if (!datasync && upperinode && (file_inode(real.file) != upperinode)) {
+		ret = ovl_real_meta_file(file, &metareal);
+		if (ret)
+			goto put_real;
+	}
+
 	old_cred = ovl_override_creds(file_inode(file)->i_sb);
 	ret = vfs_fsync_range(real.file, start, end, datasync);
+	if (!ret && metareal.file)
+		ret = vfs_fsync(metareal.file, datasync);
 	revert_creds(old_cred);
 
+	fdput(metareal);
+put_real:
 	fdput(real);
 
 	return ret;
