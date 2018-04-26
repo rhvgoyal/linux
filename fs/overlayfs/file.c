@@ -304,7 +304,7 @@ static int ovl_pre_mmap(struct file *file, unsigned long prot,
 	 * later.
 	 */
 	if ((flag & MAP_SHARED) && ovl_copy_up_shared(file_inode(file)->i_sb))
-		err = ovl_copy_up(file_dentry(file));
+		err = ovl_copy_up_flags(file_dentry(file), O_WRONLY);
 
 	return err;
 }
