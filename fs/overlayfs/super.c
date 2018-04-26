@@ -100,7 +100,7 @@ static struct dentry *ovl_d_real(struct dentry *dentry,
 	if (!d_is_reg(dentry))
 		goto bug;
 
-	real = ovl_dentry_real(dentry);
+	real = ovl_dentry_real_data(dentry);
 	if (inode == d_inode(real))
 		return real;
 
