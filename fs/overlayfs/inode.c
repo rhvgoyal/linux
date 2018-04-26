@@ -18,7 +18,7 @@
 
 int ovl_setattr(struct dentry *dentry, struct iattr *attr)
 {
-	int err;
+	int err, copy_up_flags = 0;
 	struct dentry *upperdentry;
 	const struct cred *old_cred;
 
@@ -45,9 +45,12 @@ int ovl_setattr(struct dentry *dentry, struct iattr *attr)
 		err = -ETXTBSY;
 		if (atomic_read(&realinode->i_writecount) < 0)
 			goto out_drop_write;
+
+		/* Truncate should trigger data copy up as well */
+		copy_up_flags = O_WRONLY;
 	}
 
-	err = ovl_copy_up(dentry);
+	err = ovl_copy_up_flags(dentry, copy_up_flags);
 	if (!err) {
 		struct inode *winode = NULL;
 
