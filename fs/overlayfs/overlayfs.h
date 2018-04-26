@@ -284,6 +284,7 @@ int ovl_lock_rename_workdir(struct dentry *workdir, struct dentry *upperdir);
 void ovl_copytimes(struct inode *inode);
 int ovl_check_metacopy_xattr(struct dentry *dentry);
 bool ovl_is_metacopy_dentry(struct dentry *dentry);
+char *ovl_get_redirect_xattr(struct dentry *dentry);
 
 static inline void ovl_copytimes_with_parent(struct dentry *dentry)
 {
