@@ -24,6 +24,8 @@ module_param_named(redirect_max, ovl_redirect_max, ushort, 0644);
 MODULE_PARM_DESC(ovl_redirect_max,
 		 "Maximum length of absolute redirect xattr value");
 
+static int ovl_set_redirect(struct dentry *dentry, bool samedir);
+
 int ovl_cleanup(struct inode *wdir, struct dentry *wdentry)
 {
 	int err;
@@ -468,6 +470,9 @@ static int ovl_create_or_link(struct dentry *dentry, struct inode *inode,
 	const struct cred *old_cred;
 	struct cred *override_cred;
 	struct dentry *parent = dentry->d_parent;
+	struct dentry *hardlink_upper;
+
+	hardlink_upper = hardlink ? ovl_dentry_upper(hardlink) : NULL;
 
 	err = ovl_copy_up(parent);
 	if (err)
@@ -502,12 +507,19 @@ static int ovl_create_or_link(struct dentry *dentry, struct inode *inode,
 		put_cred(override_creds(override_cred));
 		put_cred(override_cred);
 
+		if (hardlink && ovl_is_metacopy_dentry(hardlink)) {
+			err = ovl_set_redirect(hardlink, false);
+			if (err)
+				goto out_revert_creds;
+		}
+
+
 		if (!ovl_dentry_is_whiteout(dentry))
 			err = ovl_create_upper(dentry, inode, attr,
-						hardlink);
+						hardlink_upper);
 		else
 			err = ovl_create_over_whiteout(dentry, inode, attr,
-							hardlink);
+							hardlink_upper);
 		ovl_copytimes_with_parent(dentry);
 	}
 out_revert_creds:
@@ -603,8 +615,7 @@ static int ovl_link(struct dentry *old, struct inode *newdir,
 	inode = d_inode(old);
 	ihold(inode);
 
-	err = ovl_create_or_link(new, inode, NULL, ovl_dentry_upper(old),
-				 ovl_type_origin(old));
+	err = ovl_create_or_link(new, inode, NULL, old, ovl_type_origin(old));
 	if (err)
 		iput(inode);
 
