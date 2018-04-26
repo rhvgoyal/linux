@@ -228,6 +228,18 @@ struct dentry *ovl_dentry_real(struct dentry *dentry)
 	return ovl_dentry_upper(dentry) ?: ovl_dentry_lower(dentry);
 }
 
+/* Return real dentry which contains data. Skip metacopy dentries */
+struct dentry *ovl_dentry_real_data(struct dentry *dentry)
+{
+	struct dentry *upperdentry;
+
+	upperdentry = ovl_dentry_upper(dentry);
+	if (upperdentry && ovl_has_upperdata(d_inode(dentry)))
+		return upperdentry;
+
+	return ovl_dentry_lowerdata(dentry);
+}
+
 struct dentry *ovl_i_dentry_upper(struct inode *inode)
 {
 	return ovl_upperdentry_dereference(OVL_I(inode));
