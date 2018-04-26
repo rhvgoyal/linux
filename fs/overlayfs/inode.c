@@ -776,7 +776,7 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 	struct dentry *lowerdentry = lowerpath ? lowerpath->dentry : NULL;
 	bool bylower = ovl_hash_bylower(sb, upperdentry, lowerdentry, index);
 	int fsid = bylower ? lowerpath->layer->fsid : 0;
-	bool is_dir;
+	bool is_dir, metacopy = false;
 	unsigned long ino = 0;
 	int err = -ENOMEM;
 
@@ -835,6 +835,15 @@ struct inode *ovl_get_inode(struct super_block *sb, struct dentry *upperdentry,
 
 	if (index)
 		ovl_set_flag(OVL_INDEX, inode);
+
+	if (upperdentry) {
+		err = ovl_check_metacopy_xattr(upperdentry);
+		if (err < 0)
+			goto out_err;
+		metacopy = err;
+		if (!metacopy)
+			ovl_set_flag(OVL_UPPERDATA, inode);
+	}
 
 	OVL_I(inode)->redirect = redirect;
 
