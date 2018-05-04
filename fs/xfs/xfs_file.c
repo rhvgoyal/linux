@@ -868,7 +868,7 @@ xfs_file_clone_range(
 				     len, false);
 }
 
-STATIC ssize_t
+STATIC s64
 xfs_file_dedupe_range(
 	struct file	*src_file,
 	u64		loff,
