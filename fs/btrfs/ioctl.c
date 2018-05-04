@@ -3194,8 +3194,8 @@ out_unlock:
 
 #define BTRFS_MAX_DEDUPE_LEN	SZ_16M
 
-s64 btrfs_dedupe_file_range(struct file *src_file, u64 loff, u64 olen,
-			    struct file *dst_file, u64 dst_loff)
+s64 btrfs_dedupe_file_range(struct file *src_file, loff_t loff,
+			    struct file *dst_file, loff_t dst_loff, u64 olen)
 {
 	struct inode *src = file_inode(src_file);
 	struct inode *dst = file_inode(dst_file);

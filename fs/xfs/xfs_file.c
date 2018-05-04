@@ -871,10 +871,10 @@ xfs_file_clone_range(
 STATIC s64
 xfs_file_dedupe_range(
 	struct file	*src_file,
-	u64		loff,
-	u64		len,
+	loff_t		loff,
 	struct file	*dst_file,
-	u64		dst_loff)
+	loff_t		dst_loff,
+	u64		len)
 {
 	int		error;
 
