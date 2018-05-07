@@ -101,6 +101,14 @@ struct ovl_inode {
 	struct mutex lock;
 };
 
+struct ovl_inode_params {
+	struct super_block *sb;
+	struct dentry *upperdentry;
+	struct ovl_path *lowerpath;
+	struct dentry *index;
+	unsigned int numlower;
+};
+
 static inline struct ovl_inode *OVL_I(struct inode *inode)
 {
 	return container_of(inode, struct ovl_inode, vfs_inode);
