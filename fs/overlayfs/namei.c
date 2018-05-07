@@ -1076,10 +1076,13 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		upperdentry = dget(index);
 
 	if (upperdentry || ctr) {
+		struct dentry *lowerdata = NULL;
 		struct ovl_inode_params oip = {dentry->d_sb, upperdentry,
 					       stack, index, ctr,
-					       upperredirect};
-
+					       upperredirect, NULL};
+		if (ctr > 1 && !d.is_dir)
+			lowerdata = stack[ctr - 1].dentry;
+		oip.lowerdata = lowerdata;
 		inode = ovl_get_inode(&oip);
 		err = PTR_ERR(inode);
 		if (IS_ERR(inode))
