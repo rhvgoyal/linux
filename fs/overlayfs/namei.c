@@ -269,22 +269,23 @@ static int ovl_lookup_single(struct dentry *base, struct ovl_lookup_data *d,
 		d->stop = !err;
 		d->metacopy = !!err;
 		goto out;
-	}
-	if (last_element) {
-		if (d->metacopy) {
-			err = -ESTALE;
-			goto out_err;
+	} else {
+		if (last_element) {
+			if (d->metacopy) {
+				err = -ESTALE;
+				goto out_err;
+			}
+			d->is_dir = true;
 		}
-		d->is_dir = true;
-	}
-	if (d->last)
-		goto out;
+		if (d->last)
+			goto out;
 
-	if (ovl_is_opaquedir(this)) {
-		d->stop = true;
-		if (last_element)
-			d->opaque = true;
-		goto out;
+		if (ovl_is_opaquedir(this)) {
+			d->stop = true;
+			if (last_element)
+				d->opaque = true;
+			goto out;
+		}
 	}
 	err = ovl_check_redirect(this, d, prelen, post);
 	if (err)
