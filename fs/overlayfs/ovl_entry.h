@@ -107,6 +107,7 @@ struct ovl_inode_params {
 	struct ovl_path *lowerpath;
 	struct dentry *index;
 	unsigned int numlower;
+	char *redirect;
 };
 
 static inline struct ovl_inode *OVL_I(struct inode *inode)
