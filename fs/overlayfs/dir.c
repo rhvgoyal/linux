@@ -190,6 +190,7 @@ static void ovl_instantiate(struct dentry *dentry, struct inode *inode,
 	ovl_copyattr(d_inode(newdentry), inode);
 	ovl_dentry_set_upper_alias(dentry);
 	if (!hardlink) {
+		ovl_set_upperdata(inode);
 		ovl_inode_update(inode, newdentry);
 	} else {
 		WARN_ON(ovl_inode_real(inode) != d_inode(newdentry));
