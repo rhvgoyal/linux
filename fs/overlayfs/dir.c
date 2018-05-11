@@ -217,24 +217,54 @@ static int ovl_set_opaque(struct dentry *dentry, struct dentry *upperdentry)
 	return ovl_set_opaque_xerr(dentry, upperdentry, -EIO);
 }
 
-/* Common operations required to be done after creation of file on upper */
-static void ovl_instantiate(struct dentry *dentry, struct inode *inode,
-			    struct dentry *newdentry, bool hardlink)
+/*
+ * Common operations required to be done after creation of file on upper.
+ * If @hardlink is false, then @inode is a pre-allocated inode, we may or
+ * may not use to instantiate the new dentry.
+ */
+static int ovl_instantiate(struct dentry *dentry, struct inode *inode,
+			   struct dentry *newdentry, bool hardlink)
 {
+	struct ovl_inode_params oip = {
+		.upperdentry = newdentry,
+		.newinode = inode,
+	};
+
 	ovl_dir_modified(dentry->d_parent, false);
-	ovl_copyattr(d_inode(newdentry), inode);
 	ovl_dentry_set_upper_alias(dentry);
 	if (!hardlink) {
-		ovl_inode_update(inode, newdentry);
+		/*
+		 * ovl_obtain_alias() can be called after ovl_create_real()
+		 * and before we get here, so we may get an inode from cache
+		 * with the same real upperdentry that is not the inode we
+		 * pre-allocated.  In this case we will use the cached inode
+		 * to instantiate the new dentry.
+		 *
+		 * XXX: if we ever use ovl_obtain_alias() to decode directory
+		 * file handles, need to use ovl_get_inode_locked() and
+		 * d_instantiate_new() here to prevent from creating two
+		 * hashed directory inode aliases.
+		 */
+		inode = ovl_get_inode(dentry->d_sb, &oip);
+		if (IS_ERR(inode))
+			return PTR_ERR(inode);
 	} else {
 		WARN_ON(ovl_inode_real(inode) != d_inode(newdentry));
 		dput(newdentry);
 		inc_nlink(inode);
 	}
+
 	d_instantiate(dentry, inode);
+	if (inode != oip.newinode) {
+		pr_warn_ratelimited("overlayfs: newly created inode found in cache (%pd2)\n",
+				    dentry);
+	}
+
 	/* Force lookup of new upper hardlink to find its lower */
 	if (hardlink)
 		d_drop(dentry);
+
+	return 0;
 }
 
 static bool ovl_type_merge(struct dentry *dentry)
@@ -273,11 +303,17 @@ static int ovl_create_upper(struct dentry *dentry, struct inode *inode,
 		ovl_set_opaque(dentry, newdentry);
 	}
 
-	ovl_instantiate(dentry, inode, newdentry, !!attr->hardlink);
-	err = 0;
+	err = ovl_instantiate(dentry, inode, newdentry, !!attr->hardlink);
+	if (err)
+		goto out_cleanup;
 out_unlock:
 	inode_unlock(udir);
 	return err;
+
+out_cleanup:
+	ovl_cleanup(udir, newdentry);
+	dput(newdentry);
+	goto out_unlock;
 }
 
 static struct dentry *ovl_clear_empty(struct dentry *dentry,
@@ -462,10 +498,9 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 		if (err)
 			goto out_cleanup;
 	}
-	ovl_instantiate(dentry, inode, newdentry, hardlink);
-	newdentry = NULL;
-out_dput2:
-	dput(newdentry);
+	err = ovl_instantiate(dentry, inode, newdentry, hardlink);
+	if (err)
+		goto out_cleanup;
 out_dput:
 	dput(upper);
 out_unlock:
@@ -479,7 +514,8 @@ out:
 
 out_cleanup:
 	ovl_cleanup(wdir, newdentry);
-	goto out_dput2;
+	dput(newdentry);
+	goto out_dput;
 }
 
 static int ovl_create_or_link(struct dentry *dentry, struct inode *inode,
@@ -547,6 +583,7 @@ static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
 	if (err)
 		goto out;
 
+	/* Preallocate inode to be used by ovl_get_inode() */
 	err = -ENOMEM;
 	inode = ovl_new_inode(dentry->d_sb, mode, rdev);
 	if (!inode)
@@ -556,7 +593,8 @@ static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
 	attr.mode = inode->i_mode;
 
 	err = ovl_create_or_link(dentry, inode, &attr, false);
-	if (err)
+	/* Did we end up using the preallocated inode? */
+	if (inode != d_inode(dentry))
 		iput(inode);
 
 out_drop_write:
