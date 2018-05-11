@@ -14,22 +14,32 @@
 #include <linux/uio.h>
 #include "overlayfs.h"
 
-static struct file *ovl_open_realfile(const struct file *file)
+static struct file *ovl_open_realfile(const struct file *file,
+				      bool allow_metacopy)
 {
 	struct inode *inode = file_inode(file);
 	struct inode *upperinode = ovl_inode_upper(inode);
-	struct inode *realinode = upperinode ?: ovl_inode_lower(inode);
+	struct inode *realinode;
 	struct file *realfile;
+	bool upperopen = false;
 	const struct cred *old_cred;
 
+	if (upperinode && (allow_metacopy || ovl_has_upperdata(inode))) {
+		realinode = upperinode;
+		upperopen = true;
+	} else {
+		realinode = allow_metacopy ? ovl_inode_lower(inode) :
+				 ovl_inode_lowerdata(inode);
+	}
 	old_cred = ovl_override_creds(inode->i_sb);
 	realfile = path_open(&file->f_path, file->f_flags | O_NOATIME,
 			     realinode, current_cred(), false);
 	revert_creds(old_cred);
 
 	pr_debug("open(%p[%pD2/%c], 0%o) -> (%p, 0%o)\n",
-		 file, file, upperinode ? 'u' : 'l', file->f_flags,
-		 realfile, IS_ERR(realfile) ? 0 : realfile->f_flags);
+		 file, file, upperopen ? 'u' : 'l',
+		 file->f_flags, realfile,
+		 IS_ERR(realfile) ? 0 : realfile->f_flags);
 
 	return realfile;
 }
@@ -72,17 +82,24 @@ static int ovl_change_flags(struct file *file, unsigned int flags)
 	return 0;
 }
 
-static int ovl_real_fdget(const struct file *file, struct fd *real)
+static int _ovl_real_fdget(const struct file *file, struct fd *real,
+			  bool allow_metacopy)
 {
 	struct inode *inode = file_inode(file);
+	struct inode *realinode;
 
 	real->flags = 0;
 	real->file = file->private_data;
 
+	if (allow_metacopy)
+		realinode = ovl_inode_real(inode);
+	else
+		realinode = ovl_inode_realdata(inode);
+
 	/* Has it been copied up since we'd opened it? */
-	if (unlikely(file_inode(real->file) != ovl_inode_real(inode))) {
+	if (unlikely(file_inode(real->file) != realinode)) {
 		real->flags = FDPUT_FPUT;
-		real->file = ovl_open_realfile(file);
+		real->file = ovl_open_realfile(file, allow_metacopy);
 
 		return PTR_ERR_OR_ZERO(real->file);
 	}
@@ -92,6 +109,11 @@ static int ovl_real_fdget(const struct file *file, struct fd *real)
 		return ovl_change_flags(real->file, file->f_flags);
 
 	return 0;
+}
+
+static int ovl_real_fdget(const struct file *file, struct fd *real)
+{
+	return _ovl_real_fdget(file, real, false);
 }
 
 static int ovl_open(struct inode *inode, struct file *file)
@@ -107,7 +129,7 @@ static int ovl_open(struct inode *inode, struct file *file)
 	/* No longer need these flags, so don't pass them on to underlying fs */
 	file->f_flags &= ~(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC);
 
-	realfile = ovl_open_realfile(file);
+	realfile = ovl_open_realfile(file, false);
 	if (IS_ERR(realfile))
 		return PTR_ERR(realfile);
 
@@ -244,7 +266,7 @@ static int ovl_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	const struct cred *old_cred;
 	int ret;
 
-	ret = ovl_real_fdget(file, &real);
+	ret = _ovl_real_fdget(file, &real, !datasync);
 	if (ret)
 		return ret;
 
