@@ -90,7 +90,10 @@ static inline struct ovl_entry *OVL_E(struct dentry *dentry)
 }
 
 struct ovl_inode {
-	struct ovl_dir_cache *cache;
+	union {
+		struct ovl_dir_cache *cache;	/* directory */
+		struct inode *lowerdata;	/* regular file */
+	};
 	const char *redirect;
 	u64 version;
 	unsigned long flags;
@@ -108,6 +111,7 @@ struct ovl_inode_params {
 	struct dentry *index;
 	unsigned int numlower;
 	char *redirect;
+	struct dentry *lowerdata;
 };
 
 static inline struct ovl_inode *OVL_I(struct inode *inode)
