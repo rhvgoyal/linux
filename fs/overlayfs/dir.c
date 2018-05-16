@@ -160,6 +160,25 @@ int ovl_create_real(struct inode *dir, struct dentry *newdentry,
 	return err;
 }
 
+struct dentry *ovl_create_temp(struct dentry *workdir, struct ovl_cattr *attr)
+{
+	struct inode *wdir = workdir->d_inode;
+	struct dentry *temp;
+	int err;
+
+	temp = ovl_lookup_temp(workdir);
+	if (IS_ERR(temp))
+		return temp;
+
+	err = ovl_create_real(wdir, temp, attr);
+	if (err) {
+		dput(temp);
+		return ERR_PTR(err);
+	}
+
+	return temp;
+}
+
 static int ovl_set_opaque_xerr(struct dentry *dentry, struct dentry *upper,
 			       int xerr)
 {
@@ -280,14 +299,10 @@ static struct dentry *ovl_clear_empty(struct dentry *dentry,
 	if (upper->d_parent->d_inode != udir)
 		goto out_unlock;
 
-	opaquedir = ovl_lookup_temp(workdir);
+	opaquedir = ovl_create_temp(workdir, OVL_CATTR(stat.mode));
 	err = PTR_ERR(opaquedir);
 	if (IS_ERR(opaquedir))
 		goto out_unlock;
-
-	err = ovl_create_real(wdir, opaquedir, OVL_CATTR(stat.mode));
-	if (err)
-		goto out_dput;
 
 	err = ovl_copy_xattr(upper, opaquedir);
 	if (err)
@@ -318,7 +333,6 @@ static struct dentry *ovl_clear_empty(struct dentry *dentry,
 
 out_cleanup:
 	ovl_cleanup(wdir, opaquedir);
-out_dput:
 	dput(opaquedir);
 out_unlock:
 	unlock_rename(workdir, upperdir);
@@ -379,20 +393,16 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 	if (err)
 		goto out;
 
-	newdentry = ovl_lookup_temp(workdir);
-	err = PTR_ERR(newdentry);
-	if (IS_ERR(newdentry))
-		goto out_unlock;
-
 	upper = lookup_one_len(dentry->d_name.name, upperdir,
 			       dentry->d_name.len);
 	err = PTR_ERR(upper);
 	if (IS_ERR(upper))
-		goto out_dput;
+		goto out_unlock;
 
-	err = ovl_create_real(wdir, newdentry, cattr);
-	if (err)
-		goto out_dput2;
+	newdentry = ovl_create_temp(workdir, cattr);
+	err = PTR_ERR(newdentry);
+	if (IS_ERR(newdentry))
+		goto out_dput;
 
 	/*
 	 * mode could have been mutilated due to umask (e.g. sgid directory)
@@ -441,9 +451,9 @@ static int ovl_create_over_whiteout(struct dentry *dentry, struct inode *inode,
 	ovl_instantiate(dentry, inode, newdentry, hardlink);
 	newdentry = NULL;
 out_dput2:
-	dput(upper);
-out_dput:
 	dput(newdentry);
+out_dput:
+	dput(upper);
 out_unlock:
 	unlock_rename(workdir, upperdir);
 out:
