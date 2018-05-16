@@ -603,9 +603,7 @@ retry:
 			goto retry;
 		}
 
-		err = ovl_create_real(dir, work,
-				      &(struct cattr){.mode = S_IFDIR | 0},
-				      NULL);
+		err = ovl_create_real(dir, work, OVL_CATTR(attr.ia_mode));
 		if (err)
 			goto out_dput;
 
