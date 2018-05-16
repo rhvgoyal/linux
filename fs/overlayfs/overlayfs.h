@@ -373,8 +373,8 @@ struct ovl_cattr {
 
 #define OVL_CATTR(m) (&(struct ovl_cattr) { .mode = (m) })
 
-int ovl_create_real(struct inode *dir, struct dentry *newdentry,
-		    struct ovl_cattr *attr);
+struct dentry *ovl_create_real(struct inode *dir, struct dentry *newdentry,
+			       struct ovl_cattr *attr);
 struct dentry *ovl_create_temp(struct dentry *workdir, struct ovl_cattr *attr);
 
 /* file.c */

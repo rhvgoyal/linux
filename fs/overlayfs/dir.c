@@ -114,13 +114,18 @@ kill_whiteout:
 	goto out;
 }
 
-int ovl_create_real(struct inode *dir, struct dentry *newdentry,
-		    struct ovl_cattr *attr)
+struct dentry *ovl_create_real(struct inode *dir, struct dentry *newdentry,
+			       struct ovl_cattr *attr)
 {
 	int err;
 
-	if (newdentry->d_inode)
-		return -ESTALE;
+	if (IS_ERR(newdentry))
+		return newdentry;
+
+	if (newdentry->d_inode) {
+		dput(newdentry);
+		return ERR_PTR(-ESTALE);
+	}
 
 	if (attr->hardlink) {
 		err = ovl_do_link(attr->hardlink, dir, newdentry);
@@ -132,6 +137,26 @@ int ovl_create_real(struct inode *dir, struct dentry *newdentry,
 
 		case S_IFDIR:
 			err = ovl_do_mkdir(dir, newdentry, attr->mode);
+			/*
+			 * vfs_mkdir() may succeed and leave the dentry passed
+			 * to it unhashed and negative. If that happens, try to
+			 * lookup a new hashed and positive dentry.
+			 */
+			if (!err && unlikely(d_unhashed(newdentry))) {
+				struct dentry *d;
+
+				d = lookup_one_len(newdentry->d_name.name,
+						   newdentry->d_parent,
+						   newdentry->d_name.len);
+				dput(newdentry);
+				if (IS_ERR(d)) {
+					err = PTR_ERR(d);
+					pr_warn("overlayfs: failed lookup after mkdir (%pd2, err=%i).\n",
+						newdentry, err);
+					return d;
+				}
+				newdentry = d;
+			}
 			break;
 
 		case S_IFCHR:
@@ -157,26 +182,17 @@ int ovl_create_real(struct inode *dir, struct dentry *newdentry,
 		 */
 		err = -ENOENT;
 	}
-	return err;
+	if (err) {
+		dput(newdentry);
+		return ERR_PTR(err);
+	}
+	return newdentry;
 }
 
 struct dentry *ovl_create_temp(struct dentry *workdir, struct ovl_cattr *attr)
 {
-	struct inode *wdir = workdir->d_inode;
-	struct dentry *temp;
-	int err;
-
-	temp = ovl_lookup_temp(workdir);
-	if (IS_ERR(temp))
-		return temp;
-
-	err = ovl_create_real(wdir, temp, attr);
-	if (err) {
-		dput(temp);
-		return ERR_PTR(err);
-	}
-
-	return temp;
+	return ovl_create_real(d_inode(workdir), ovl_lookup_temp(workdir),
+			       attr);
 }
 
 static int ovl_set_opaque_xerr(struct dentry *dentry, struct dentry *upper,
@@ -243,14 +259,14 @@ static int ovl_create_upper(struct dentry *dentry, struct inode *inode,
 		attr->mode &= ~current_umask();
 
 	inode_lock_nested(udir, I_MUTEX_PARENT);
-	newdentry = lookup_one_len(dentry->d_name.name, upperdir,
-				   dentry->d_name.len);
+	newdentry = ovl_create_real(udir,
+				    lookup_one_len(dentry->d_name.name,
+						   upperdir,
+						   dentry->d_name.len),
+				    attr);
 	err = PTR_ERR(newdentry);
 	if (IS_ERR(newdentry))
 		goto out_unlock;
-	err = ovl_create_real(udir, newdentry, attr);
-	if (err)
-		goto out_dput;
 
 	if (ovl_type_merge(dentry->d_parent) && d_is_dir(newdentry)) {
 		/* Setting opaque here is just an optimization, allow to fail */
@@ -258,9 +274,7 @@ static int ovl_create_upper(struct dentry *dentry, struct inode *inode,
 	}
 
 	ovl_instantiate(dentry, inode, newdentry, !!attr->hardlink);
-	newdentry = NULL;
-out_dput:
-	dput(newdentry);
+	err = 0;
 out_unlock:
 	inode_unlock(udir);
 	return err;
