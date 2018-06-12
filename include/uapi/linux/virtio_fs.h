@@ -1,9 +1,6 @@
-#ifndef _LINUX_VIRTIO_IDS_H
-#define _LINUX_VIRTIO_IDS_H
-/*
- * Virtio IDs
- *
- * This header is BSD licensed so anyone can use the definitions to implement
+#ifndef _UAPI_LINUX_VIRTIO_FS_H
+#define _UAPI_LINUX_VIRTIO_FS_H
+/* This header is BSD licensed so anyone can use the definitions to implement
  * compatible drivers/servers.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,21 +25,17 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE. */
+#include <linux/types.h>
+#include <linux/virtio_ids.h>
+#include <linux/virtio_config.h>
+#include <linux/virtio_types.h>
 
-#define VIRTIO_ID_NET		1 /* virtio net */
-#define VIRTIO_ID_BLOCK		2 /* virtio block */
-#define VIRTIO_ID_CONSOLE	3 /* virtio console */
-#define VIRTIO_ID_RNG		4 /* virtio rng */
-#define VIRTIO_ID_BALLOON	5 /* virtio balloon */
-#define VIRTIO_ID_RPMSG		7 /* virtio remote processor messaging */
-#define VIRTIO_ID_SCSI		8 /* virtio scsi */
-#define VIRTIO_ID_9P		9 /* 9p virtio console */
-#define VIRTIO_ID_RPROC_SERIAL 11 /* virtio remoteproc serial link */
-#define VIRTIO_ID_CAIF	       12 /* Virtio caif */
-#define VIRTIO_ID_GPU          16 /* virtio GPU */
-#define VIRTIO_ID_INPUT        18 /* virtio input */
-#define VIRTIO_ID_VSOCK        19 /* virtio vsock transport */
-#define VIRTIO_ID_CRYPTO       20 /* virtio crypto */
-#define VIRTIO_ID_FS           26 /* virtio filesystem */
+struct virtio_fs_config {
+	/* Filesystem name (UTF-8, not NUL-terminated, padded with NULs) */
+	__u8 tag[36];
 
-#endif /* _LINUX_VIRTIO_IDS_H */
+	/* Number of request queues */
+	__u32 num_queues;
+} __attribute__((packed));
+
+#endif /* _UAPI_LINUX_VIRTIO_FS_H */
