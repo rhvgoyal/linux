@@ -981,11 +981,12 @@ void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 }
 EXPORT_SYMBOL_GPL(fuse_send_init);
 
-static void fuse_free_conn(struct fuse_conn *fc)
+void fuse_free_conn(struct fuse_conn *fc)
 {
 	WARN_ON(!list_empty(&fc->devices));
 	kfree_rcu(fc, rcu);
 }
+EXPORT_SYMBOL_GPL(fuse_free_conn);
 
 static int fuse_bdi_init(struct fuse_conn *fc, struct super_block *sb)
 {
@@ -1128,14 +1129,16 @@ int fuse_fill_super_common(struct super_block *sb,
 	if (sb->s_user_ns != &init_user_ns)
 		sb->s_xattr = fuse_no_acl_xattr_handlers;
 
-	fc = kmalloc(sizeof(*fc), GFP_KERNEL);
-	err = -ENOMEM;
-	if (!fc)
-		goto err;
-
-	fuse_conn_init(fc, sb->s_user_ns, mount_data->fiq_ops,
-		       mount_data->fiq_priv);
-	fc->release = fuse_free_conn;
+	fc = get_fuse_conn_super(sb);
+	if (!fc) {
+		fc = kmalloc(sizeof(*fc), GFP_KERNEL);
+		err = -ENOMEM;
+		if (!fc)
+			goto err;
+		fuse_conn_init(fc, sb->s_user_ns, mount_data->fiq_ops,
+			       mount_data->fiq_priv);
+		fc->release = fuse_free_conn;
+	}
 
 	fud = fuse_dev_alloc_install(fc);
 	if (!fud)
@@ -1170,7 +1173,7 @@ int fuse_fill_super_common(struct super_block *sb,
 	/* Root dentry doesn't have .d_revalidate */
 	sb->s_d_op = &fuse_dentry_operations;
 
-	if (is_bdev) {
+	if (mount_data->destroy) {
 		fc->destroy_req = fuse_request_alloc(0);
 		if (!fc->destroy_req)
 			goto err_put_root;
@@ -1239,6 +1242,7 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	d.fiq_ops = &fuse_dev_fiq_ops;
 	d.fiq_priv = NULL;
 	d.fudptr = &file->private_data;
+	d.destroy = is_bdev;
 	err = fuse_fill_super_common(sb, &d);
 	if (err < 0)
 		goto err_free_init_req;
@@ -1282,11 +1286,12 @@ static void fuse_sb_destroy(struct super_block *sb)
 	}
 }
 
-static void fuse_kill_sb_anon(struct super_block *sb)
+void fuse_kill_sb_anon(struct super_block *sb)
 {
 	fuse_sb_destroy(sb);
 	kill_anon_super(sb);
 }
+EXPORT_SYMBOL_GPL(fuse_kill_sb_anon);
 
 static struct file_system_type fuse_fs_type = {
 	.owner		= THIS_MODULE,
