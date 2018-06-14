@@ -59,10 +59,12 @@ extern unsigned max_user_congthresh;
 /** Mount options */
 struct fuse_mount_data {
 	int fd;
+	const char *tag; /* lifetime: .fill_super() data argument */
 	unsigned rootmode;
 	kuid_t user_id;
 	kgid_t group_id;
 	unsigned fd_present:1;
+	unsigned tag_present:1;
 	unsigned rootmode_present:1;
 	unsigned user_id_present:1;
 	unsigned group_id_present:1;
@@ -1000,6 +1002,13 @@ int parse_fuse_opt(char *opt, struct fuse_mount_data *d, int is_bdev,
 int fuse_fill_super_common(struct super_block *sb,
 			   struct fuse_mount_data *mount_data,
 			   void **fudptr);
+
+/**
+ * Disassociate fuse connection from superblock and kill the superblock
+ *
+ * Calls kill_anon_super(), use with do not use with bdev mounts.
+ */
+void fuse_kill_sb_anon(struct super_block *sb);
 
 /**
  * Add connection to control filesystem

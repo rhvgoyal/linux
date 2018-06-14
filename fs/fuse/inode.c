@@ -431,6 +431,7 @@ static int fuse_statfs(struct dentry *dentry, struct kstatfs *buf)
 
 enum {
 	OPT_FD,
+	OPT_TAG,
 	OPT_ROOTMODE,
 	OPT_USER_ID,
 	OPT_GROUP_ID,
@@ -443,6 +444,7 @@ enum {
 
 static const match_table_t tokens = {
 	{OPT_FD,			"fd=%u"},
+	{OPT_TAG,			"tag=%s"},
 	{OPT_ROOTMODE,			"rootmode=%o"},
 	{OPT_USER_ID,			"user_id=%u"},
 	{OPT_GROUP_ID,			"group_id=%u"},
@@ -487,6 +489,11 @@ int parse_fuse_opt(char *opt, struct fuse_mount_data *d, int is_bdev,
 				return 0;
 			d->fd = value;
 			d->fd_present = 1;
+			break;
+
+		case OPT_TAG:
+			d->tag = args[0].from;
+			d->tag_present = 1;
 			break;
 
 		case OPT_ROOTMODE:
@@ -1191,7 +1198,7 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	err = -EINVAL;
 	if (!parse_fuse_opt(data, &d, is_bdev, sb->s_user_ns))
 		goto err;
-	if (!d.fd_present)
+	if (!d.fd_present || d.tag_present)
 		goto err;
 
 	file = fget(d.fd);
@@ -1254,11 +1261,12 @@ static void fuse_sb_destroy(struct super_block *sb)
 	}
 }
 
-static void fuse_kill_sb_anon(struct super_block *sb)
+void fuse_kill_sb_anon(struct super_block *sb)
 {
 	fuse_sb_destroy(sb);
 	kill_anon_super(sb);
 }
+EXPORT_SYMBOL_GPL(fuse_kill_sb_anon);
 
 static struct file_system_type fuse_fs_type = {
 	.owner		= THIS_MODULE,
