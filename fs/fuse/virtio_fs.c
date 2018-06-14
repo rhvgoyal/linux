@@ -8,6 +8,7 @@
 #include <linux/module.h>
 #include <linux/virtio.h>
 #include <linux/virtio_fs.h>
+#include "fuse_i.h"
 
 /* List of virtio-fs device instances and a lock for the list */
 static DEFINE_MUTEX(virtio_fs_mutex);
@@ -17,6 +18,8 @@ static LIST_HEAD(virtio_fs_instances);
 struct virtio_fs {
 	struct list_head list; /* on virtio_fs_instances */
 	char *tag;
+	struct fuse_dev **fud; /* 1:1 mapping with request queues */
+	unsigned int num_queues;
 };
 
 /* Add a new instance to the list or return -EEXIST if tag name exists*/
@@ -40,6 +43,46 @@ static int virtio_fs_add_instance(struct virtio_fs *fs)
 	if (duplicate)
 		return -EEXIST;
 	return 0;
+}
+
+/* Return the virtio_fs with a given tag, or NULL */
+static struct virtio_fs *virtio_fs_find_instance(const char *tag)
+{
+	struct virtio_fs *fs;
+
+	mutex_lock(&virtio_fs_mutex);
+
+	list_for_each_entry(fs, &virtio_fs_instances, list) {
+		if (strcmp(fs->tag, tag) == 0)
+			goto found;
+	}
+
+	fs = NULL; /* not found */
+
+found:
+	mutex_unlock(&virtio_fs_mutex);
+
+	return fs;
+}
+
+static void virtio_fs_free_devs(struct virtio_fs *fs)
+{
+	unsigned int i;
+
+	/* TODO lock */
+
+	if (!fs->fud)
+		return;
+
+	for (i = 0; i < fs->num_queues; i++) {
+		struct fuse_dev *fud = fs->fud[i];
+
+		if (fud)
+			fuse_dev_free(fud); /* TODO need to quiesce/end_requests/decrement dev_count */
+	}
+
+	kfree(fs->fud);
+	fs->fud = NULL;
 }
 
 /* Read filesystem name from virtio config into fs->tag (must kfree()). */
@@ -76,6 +119,13 @@ static int virtio_fs_probe(struct virtio_device *vdev)
 		return -ENOMEM;
 	vdev->priv = fs;
 
+	virtio_cread(vdev, struct virtio_fs_config, num_queues,
+		     &fs->num_queues);
+	if (fs->num_queues == 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	ret = virtio_fs_read_tag(vdev, fs);
 	if (ret < 0)
 		goto out;
@@ -94,6 +144,8 @@ out:
 static void virtio_fs_remove(struct virtio_device *vdev)
 {
 	struct virtio_fs *fs = vdev->priv;
+
+	virtio_fs_free_devs(fs);
 
 	vdev->config->reset(vdev);
 
@@ -138,11 +190,82 @@ static struct virtio_driver virtio_fs_driver = {
 #endif
 };
 
+static int virtio_fs_fill_super(struct super_block *sb, void *data,
+				int silent)
+{
+	struct fuse_mount_data d;
+	struct fuse_conn *fc;
+	struct virtio_fs *fs;
+	int is_bdev = sb->s_bdev != NULL;
+	unsigned int i;
+	int err;
+
+	err = -EINVAL;
+	if (!parse_fuse_opt(data, &d, is_bdev, sb->s_user_ns))
+		goto err;
+	if (d.fd_present) {
+		printk(KERN_ERR "virtio-fs: fd option cannot be used\n");
+		goto err;
+	}
+	if (!d.tag_present) {
+		printk(KERN_ERR "virtio-fs: missing tag option\n");
+		goto err;
+	}
+
+	fs = virtio_fs_find_instance(d.tag);
+	if (!fs) {
+		printk(KERN_ERR "virtio-fs: tag not found\n");
+		err = -ENOENT;
+		goto err;
+	}
+
+	/* TODO lock */
+	if (fs->fud) {
+		printk(KERN_ERR "virtio-fs: device already in use\n");
+		err = -EBUSY;
+		goto err;
+	}
+	fs->fud = kcalloc(fs->num_queues, sizeof(fs->fud[0]), GFP_KERNEL);
+	if (!fs->fud) {
+		err = -ENOMEM;
+		goto err_fud;
+	}
+
+	err = fuse_fill_super_common(sb, &d, (void **)&fs->fud[0]);
+	if (err < 0)
+		goto err;
+
+	fc = fs->fud[0]->fc;
+
+	/* Allocate remaining fuse_devs */
+	err = -ENOMEM;
+	/* TODO take fuse_mutex around this loop? */
+	for (i = 1; i < fs->num_queues; i++) {
+		fs->fud[i] = fuse_dev_alloc(fc);
+		if (!fs->fud[i]) {
+			/* TODO */
+		}
+		atomic_inc(&fc->dev_count);
+	}
+
+	return 0;
+
+err:
+	return err;
+}
+
+static struct dentry *virtio_fs_mount(struct file_system_type *fs_type,
+				      int flags, const char *dev_name,
+				      void *raw_data)
+{
+	return mount_nodev(fs_type, flags, raw_data, virtio_fs_fill_super);
+}
+
 static struct file_system_type virtio_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= KBUILD_MODNAME,
-	.mount		= NULL,
-	.kill_sb	= NULL,
+	.mount		= virtio_fs_mount,
+	.kill_sb	= fuse_kill_sb_anon,
 };
 
 static int __init virtio_fs_init(void)
