@@ -134,10 +134,26 @@ static int virtio_fs_read_tag(struct virtio_device *vdev, struct virtio_fs *fs)
 	return 0;
 }
 
-static void virtio_fs_hiprio_done(struct virtqueue *vq)
+/* Work function for hiprio completion */
+static void virtio_fs_hiprio_done_work(struct work_struct *work)
 {
-	/* TODO */
-	dev_dbg(&vq->vdev->dev, "%s\n", __func__);
+	struct virtio_fs_vq *fsvq = container_of(work, struct virtio_fs_vq,
+						 done_work);
+	struct fuse_pqueue *fpq = &fsvq->fud->pq;
+	struct virtqueue *vq = fsvq->vq;
+
+	/* Free completed FUSE_FORGET requests */
+	spin_lock(&fpq->lock);
+	do {
+		unsigned len;
+		void *req;
+
+		virtqueue_disable_cb(vq);
+
+		while ((req = virtqueue_get_buf(vq, &len)) != NULL)
+			kfree(req);
+	} while (!virtqueue_enable_cb(vq) && likely(!virtqueue_is_broken(vq)));
+	spin_unlock(&fpq->lock);
 }
 
 /* Allocate and copy args into req->argbuf */
@@ -293,6 +309,7 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 	snprintf(fs->vqs[VQ_HIPRIO].name, sizeof(fs->vqs[VQ_HIPRIO].name),
 			"hiprio");
 	names[VQ_HIPRIO] = fs->vqs[VQ_HIPRIO].name;
+	INIT_WORK(&fs->vqs[VQ_HIPRIO].done_work, virtio_fs_hiprio_done_work);
 
 	/* Initialize the requests virtqueues */
 	for (i = VQ_REQUEST; i < fs->nvqs; i++) {
@@ -415,11 +432,79 @@ static struct virtio_driver virtio_fs_driver = {
 #endif
 };
 
+struct virtio_fs_forget {
+	struct fuse_in_header ih;
+	struct fuse_forget_in arg;
+};
+
 static void virtio_fs_wake_forget_and_unlock(struct fuse_iqueue *fiq)
 __releases(fiq->waitq.lock)
 {
-	/* TODO */
+	struct fuse_forget_link *link;
+	struct virtio_fs_forget *forget;
+	struct fuse_pqueue *fpq;
+	struct scatterlist sg;
+	struct scatterlist *sgs[] = {&sg};
+	struct virtio_fs *fs;
+	struct virtqueue *vq;
+	bool notify;
+	u64 unique;
+	int ret;
+
+	BUG_ON(!fiq->forget_list_head.next);
+	link = fiq->forget_list_head.next;
+	BUG_ON(link->next);
+	fiq->forget_list_head.next = NULL;
+	fiq->forget_list_tail = &fiq->forget_list_head;
+
+	unique = fuse_get_unique(fiq);
+
+	fs = fiq->priv;
+
 	spin_unlock(&fiq->waitq.lock);
+
+	/* Allocate a buffer for the request */
+	forget = kmalloc(sizeof(*forget), GFP_ATOMIC);
+	if (!forget) {
+		pr_err("virtio-fs: dropped FORGET: kmalloc failed\n");
+		goto out; /* TODO avoid dropping it? */
+	}
+
+	forget->ih = (struct fuse_in_header){
+		.opcode = FUSE_FORGET,
+		.nodeid = link->forget_one.nodeid,
+		.unique = unique,
+		.len = sizeof(*forget),
+	};
+	forget->arg = (struct fuse_forget_in){
+		.nlookup = link->forget_one.nlookup,
+	};
+
+	sg_init_one(&sg, forget, sizeof(*forget));
+
+	/* Enqueue the request */
+	vq = fs->vqs[1].vq;
+	dev_dbg(&vq->vdev->dev, "%s\n", __func__);
+	fpq = vq_to_fpq(vq);
+	spin_lock(&fpq->lock);
+
+	ret = virtqueue_add_sgs(vq, sgs, 1, 0, forget, GFP_ATOMIC);
+	if (ret < 0) {
+		pr_err("virtio-fs: dropped FORGET: queue full\n");
+		/* TODO handle full virtqueue */
+		spin_unlock(&fpq->lock);
+		goto out;
+	}
+
+	notify = virtqueue_kick_prepare(vq);
+
+	spin_unlock(&fpq->lock);
+
+	if (notify)
+		virtqueue_notify(vq);
+
+out:
+	kfree(link);
 }
 
 static void virtio_fs_wake_interrupt_and_unlock(struct fuse_iqueue *fiq)
