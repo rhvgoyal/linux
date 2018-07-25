@@ -5,6 +5,8 @@
  */
 
 #include <linux/fs.h>
+#include <linux/dax.h>
+#include <linux/pfn_t.h>
 #include <linux/module.h>
 #include <linux/virtio.h>
 #include <linux/virtio_fs.h>
@@ -34,6 +36,11 @@ struct virtio_fs {
 	struct virtio_fs_vq *vqs;
 	unsigned nvqs;            /* number of virtqueues */
 	unsigned num_queues;      /* number of request queues */
+	struct dax_device *dax_dev;
+
+	/* DAX memory window where file contents are mapped */
+	void *window_kaddr;
+	phys_addr_t window_phys_addr;
 };
 
 static inline struct virtio_fs_vq *vq_to_fsvq(struct virtqueue *vq)
@@ -341,6 +348,44 @@ static void virtio_fs_cleanup_vqs(struct virtio_device *vdev,
 	vdev->config->del_vqs(vdev);
 }
 
+/* Map a window offset to a page frame number.  The window offset will have
+ * been produced by .iomap_begin(), which maps a file offset to a window
+ * offset.
+ */
+static long virtio_fs_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
+				    long nr_pages, void **kaddr, pfn_t *pfn)
+{
+	struct virtio_fs *fs = dax_get_private(dax_dev);
+	phys_addr_t offset = PFN_PHYS(pgoff);
+
+	if (kaddr)
+		*kaddr = fs->window_kaddr + offset;
+	if (pfn)
+		*pfn = phys_to_pfn_t(fs->window_phys_addr + offset,
+					PFN_DEV | PFN_MAP);
+	return nr_pages;
+}
+
+static size_t virtio_fs_copy_from_iter(struct dax_device *dax_dev,
+				       pgoff_t pgoff, void *addr,
+				       size_t bytes, struct iov_iter *i)
+{
+	return copy_from_iter(addr, bytes, i);
+}
+
+static size_t virtio_fs_copy_to_iter(struct dax_device *dax_dev,
+				       pgoff_t pgoff, void *addr,
+				       size_t bytes, struct iov_iter *i)
+{
+	return copy_to_iter(addr, bytes, i);
+}
+
+static const struct dax_operations virtio_fs_dax_ops = {
+	.direct_access = virtio_fs_direct_access,
+	.copy_from_iter = virtio_fs_copy_from_iter,
+	.copy_to_iter = virtio_fs_copy_to_iter,
+};
+
 static int virtio_fs_probe(struct virtio_device *vdev)
 {
 	struct virtio_fs *fs;
@@ -362,6 +407,17 @@ static int virtio_fs_probe(struct virtio_device *vdev)
 	/* TODO vq affinity */
 	/* TODO populate notifications vq */
 
+	if (IS_ENABLED(CONFIG_DAX_DRIVER)) {
+		/* TODO map window */
+		fs->window_kaddr = NULL;
+		fs->window_phys_addr = 0;
+
+		fs->dax_dev = alloc_dax(fs, NULL, &virtio_fs_dax_ops);
+		if (!fs->dax_dev)
+			goto out_vqs; /* TODO handle case where device doesn't expose
+					 BAR */
+	}
+
 	/* Bring the device online in case the filesystem is mounted and
 	 * requests need to be sent before we return.
 	 */
@@ -376,6 +432,12 @@ static int virtio_fs_probe(struct virtio_device *vdev)
 out_vqs:
 	vdev->config->reset(vdev);
 	virtio_fs_cleanup_vqs(vdev, fs);
+
+	if (fs->dax_dev) {
+		kill_dax(fs->dax_dev);
+		put_dax(fs->dax_dev);
+		fs->dax_dev = NULL;
+	}
 
 out:
 	vdev->priv = NULL;
@@ -394,6 +456,12 @@ static void virtio_fs_remove(struct virtio_device *vdev)
 	mutex_lock(&virtio_fs_mutex);
 	list_del(&fs->list);
 	mutex_unlock(&virtio_fs_mutex);
+
+	if (fs->dax_dev) {
+		kill_dax(fs->dax_dev);
+		put_dax(fs->dax_dev);
+		fs->dax_dev = NULL;
+	}
 
 	vdev->priv = NULL;
 }
