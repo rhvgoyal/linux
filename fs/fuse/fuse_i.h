@@ -68,6 +68,7 @@ struct fuse_mount_data {
 	unsigned group_id_present:1;
 	unsigned default_permissions:1;
 	unsigned allow_other:1;
+	unsigned dax:1;
 	unsigned destroy:1;
 	unsigned max_read;
 	unsigned blksize;

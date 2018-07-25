@@ -5,6 +5,9 @@
  */
 
 #include <linux/fs.h>
+#include <linux/dax.h>
+#include <linux/pci.h>
+#include <linux/pfn_t.h>
 #include <linux/module.h>
 #include <linux/virtio.h>
 #include <linux/virtio_fs.h>
@@ -33,6 +36,18 @@ struct virtio_fs_vq {
 	char name[24];
 } ____cacheline_aligned_in_smp;
 
+/* State needed for devm_memremap_pages().  This API is called on the
+ * underlying pci_dev instead of struct virtio_fs (layering violation).  Since
+ * the memremap release function only gets called when the pci_dev is released,
+ * keep the associated state separate from struct virtio_fs (it has a different
+ * lifecycle from pci_dev).
+ */
+struct virtio_fs_memremap_info {
+	struct dev_pagemap pgmap;
+	struct percpu_ref ref;
+	struct completion completion;
+};
+
 /* A virtio-fs device instance */
 struct virtio_fs {
 	struct list_head list;    /* on virtio_fs_instances */
@@ -40,6 +55,12 @@ struct virtio_fs {
 	struct virtio_fs_vq *vqs;
 	unsigned nvqs;            /* number of virtqueues */
 	unsigned num_queues;      /* number of request queues */
+	struct dax_device *dax_dev;
+
+	/* DAX memory window where file contents are mapped */
+	void *window_kaddr;
+	phys_addr_t window_phys_addr;
+	size_t window_len;
 };
 
 struct virtio_fs_forget {
@@ -433,6 +454,151 @@ static void virtio_fs_cleanup_vqs(struct virtio_device *vdev,
 	vdev->config->del_vqs(vdev);
 }
 
+/* Map a window offset to a page frame number.  The window offset will have
+ * been produced by .iomap_begin(), which maps a file offset to a window
+ * offset.
+ */
+static long virtio_fs_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
+				    long nr_pages, void **kaddr, pfn_t *pfn)
+{
+	struct virtio_fs *fs = dax_get_private(dax_dev);
+	phys_addr_t offset = PFN_PHYS(pgoff);
+	size_t max_nr_pages = fs->window_len/PAGE_SIZE - pgoff;
+
+	if (kaddr)
+		*kaddr = fs->window_kaddr + offset;
+	if (pfn)
+		*pfn = phys_to_pfn_t(fs->window_phys_addr + offset,
+					PFN_DEV | PFN_MAP);
+	return nr_pages > max_nr_pages ? max_nr_pages : nr_pages;
+}
+
+static size_t virtio_fs_copy_from_iter(struct dax_device *dax_dev,
+				       pgoff_t pgoff, void *addr,
+				       size_t bytes, struct iov_iter *i)
+{
+	return copy_from_iter(addr, bytes, i);
+}
+
+static size_t virtio_fs_copy_to_iter(struct dax_device *dax_dev,
+				       pgoff_t pgoff, void *addr,
+				       size_t bytes, struct iov_iter *i)
+{
+	return copy_to_iter(addr, bytes, i);
+}
+
+static const struct dax_operations virtio_fs_dax_ops = {
+	.direct_access = virtio_fs_direct_access,
+	.copy_from_iter = virtio_fs_copy_from_iter,
+	.copy_to_iter = virtio_fs_copy_to_iter,
+};
+
+static void virtio_fs_percpu_release(struct percpu_ref *ref)
+{
+	struct virtio_fs_memremap_info *mi =
+		container_of(ref, struct virtio_fs_memremap_info, ref);
+
+	complete(&mi->completion);
+}
+
+static void virtio_fs_percpu_exit(void *data)
+{
+	struct virtio_fs_memremap_info *mi = data;
+
+	wait_for_completion(&mi->completion);
+	percpu_ref_exit(&mi->ref);
+}
+
+static void virtio_fs_percpu_kill(struct percpu_ref *ref)
+{
+	percpu_ref_kill(ref);
+}
+
+static void virtio_fs_cleanup_dax(void *data)
+{
+	struct virtio_fs *fs = data;
+
+	kill_dax(fs->dax_dev);
+	put_dax(fs->dax_dev);
+}
+
+static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
+{
+	struct virtio_shm_region cache_reg;
+	struct virtio_fs_memremap_info *mi;
+	struct dev_pagemap *pgmap;
+	bool have_cache;
+	int ret;
+
+	if (!IS_ENABLED(CONFIG_DAX_DRIVER))
+		return 0;
+
+	/* Get cache region */
+	have_cache = virtio_get_shm_region(vdev,
+					   &cache_reg,
+					   (u8)VIRTIO_FS_SHMCAP_ID_CACHE);
+	if (!have_cache) {
+		dev_notice(&vdev->dev, "%s: No cache capability\n", __func__);
+		return 0;
+	} else {
+		dev_notice(&vdev->dev, "Cache len: 0x%llx @ 0x%llx\n",
+			   cache_reg.len, cache_reg.addr);
+	}
+
+	mi = devm_kzalloc(&vdev->dev, sizeof(*mi), GFP_KERNEL);
+	if (!mi)
+		return -ENOMEM;
+
+	init_completion(&mi->completion);
+	ret = percpu_ref_init(&mi->ref, virtio_fs_percpu_release, 0,
+			      GFP_KERNEL);
+	if (ret < 0) {
+		dev_err(&vdev->dev, "%s: percpu_ref_init failed (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+
+	ret = devm_add_action(&vdev->dev, virtio_fs_percpu_exit, mi);
+	if (ret < 0) {
+		percpu_ref_exit(&mi->ref);
+		return ret;
+	}
+
+	pgmap = &mi->pgmap;
+	pgmap->altmap_valid = false;
+	pgmap->ref = &mi->ref;
+	pgmap->kill = virtio_fs_percpu_kill;
+	pgmap->type = MEMORY_DEVICE_FS_DAX;
+
+	/* Ideally we would directly use the PCI BAR resource but
+	 * devm_memremap_pages() wants its own copy in pgmap.  So
+	 * initialize a struct resource from scratch (only the start
+	 * and end fields will be used).
+	 */
+	pgmap->res = (struct resource){
+		.name = "virtio-fs dax window",
+		.start = (phys_addr_t) cache_reg.addr,
+		.end = (phys_addr_t) cache_reg.addr + cache_reg.len - 1,
+	};
+
+	fs->window_kaddr = devm_memremap_pages(&vdev->dev, pgmap);
+	if (IS_ERR(fs->window_kaddr))
+		return PTR_ERR(fs->window_kaddr);
+
+	fs->window_phys_addr = (phys_addr_t) cache_reg.addr;
+	fs->window_len = (phys_addr_t) cache_reg.len;
+
+	dev_dbg(&vdev->dev, "%s: window kaddr 0x%px phys_addr 0x%llx"
+		" len 0x%llx\n", __func__, fs->window_kaddr, cache_reg.addr,
+		cache_reg.len);
+
+	fs->dax_dev = alloc_dax(fs, NULL, &virtio_fs_dax_ops);
+	if (!fs->dax_dev)
+		return -ENOMEM;
+
+	return devm_add_action_or_reset(&vdev->dev, virtio_fs_cleanup_dax, fs);
+}
+
 static int virtio_fs_probe(struct virtio_device *vdev)
 {
 	struct virtio_fs *fs;
@@ -454,6 +620,10 @@ static int virtio_fs_probe(struct virtio_device *vdev)
 	/* TODO vq affinity */
 	/* TODO populate notifications vq */
 
+	ret = virtio_fs_setup_dax(vdev, fs);
+	if (ret < 0)
+		goto out_vqs;
+
 	/* Bring the device online in case the filesystem is mounted and
 	 * requests need to be sent before we return.
 	 */
@@ -468,7 +638,6 @@ static int virtio_fs_probe(struct virtio_device *vdev)
 out_vqs:
 	vdev->config->reset(vdev);
 	virtio_fs_cleanup_vqs(vdev, fs);
-
 out:
 	vdev->priv = NULL;
 	return ret;
@@ -985,7 +1154,7 @@ static struct dentry *virtio_fs_mount(struct file_system_type *fs_type,
 	fc = kzalloc(sizeof(struct fuse_conn), GFP_KERNEL);
 	if (!fc)
 		return ERR_PTR(-ENOMEM);
-	d.dax_dev = NULL;
+	d.dax_dev = d.dax ? fs->dax_dev : NULL;
 	fuse_conn_init(fc, get_user_ns(current_user_ns()), d.dax_dev,
 		       &virtio_fs_fiq_ops, fs);
 	fc->release = fuse_free_conn;
