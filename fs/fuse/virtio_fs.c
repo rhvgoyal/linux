@@ -985,8 +985,9 @@ static struct dentry *virtio_fs_mount(struct file_system_type *fs_type,
 	fc = kzalloc(sizeof(struct fuse_conn), GFP_KERNEL);
 	if (!fc)
 		return ERR_PTR(-ENOMEM);
-	fuse_conn_init(fc, get_user_ns(current_user_ns()), &virtio_fs_fiq_ops,
-		       fs);
+	d.dax_dev = NULL;
+	fuse_conn_init(fc, get_user_ns(current_user_ns()), d.dax_dev,
+		       &virtio_fs_fiq_ops, fs);
 	fc->release = fuse_free_conn;
 
 	s = sget(fs_type, virtio_fs_test_super, virtio_fs_set_super, flags, fc);
