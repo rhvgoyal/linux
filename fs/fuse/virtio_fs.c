@@ -866,6 +866,7 @@ static int virtio_fs_fill_super(struct super_block *sb, void *data,
  		goto err_free_fuse_devs;
 	__set_bit(FR_BACKGROUND, &init_req->flags);
 
+	d.dax_dev = NULL;
 	d.fiq_ops = &virtio_fs_fiq_ops;
 	d.fiq_priv = fs;
 	d.fudptr = (void **)&fs->vqs[VQ_REQUEST].fud;
