@@ -735,6 +735,9 @@ struct fuse_conn {
 
 	/** List of device instances belonging to this connection */
 	struct list_head devices;
+
+	/** DAX device, non-NULL if DAX is supported */
+	struct dax_device *dax_dev;
 };
 
 static inline struct fuse_conn *get_fuse_conn_super(struct super_block *sb)
@@ -947,7 +950,8 @@ struct fuse_conn *fuse_conn_get(struct fuse_conn *fc);
  * Initialize fuse_conn
  */
 void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
-		    const struct fuse_iqueue_ops *fiq_ops, void *fiq_priv);
+			struct dax_device *dax_dev,
+			const struct fuse_iqueue_ops *fiq_ops, void *fiq_priv);
 
 /**
  * Release reference to fuse_conn
@@ -969,12 +973,14 @@ int parse_fuse_opt(char *opt, struct fuse_mount_data *d, int is_bdev,
  * Fill in superblock and initialize fuse connection
  * @sb: partially-initialized superblock to fill in
  * @mount_data: mount parameters
+ * @dax_dev: DAX device, may be NULL
  * @fiq_ops: fuse input queue operations
  * @fiq_priv: device-specific state for fuse_iqueue
  * @fudptr: fuse_dev pointer to fill in, should contain NULL on entry
  */
 int fuse_fill_super_common(struct super_block *sb,
 			   struct fuse_mount_data *mount_data,
+			   struct dax_device *dax_dev,
 			   const struct fuse_iqueue_ops *fiq_ops,
 			   void *fiq_priv,
 			   void **fudptr);

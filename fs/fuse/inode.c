@@ -599,7 +599,8 @@ static void fuse_pqueue_init(struct fuse_pqueue *fpq)
 }
 
 void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
-		    const struct fuse_iqueue_ops *fiq_ops, void *fiq_priv)
+			struct dax_device *dax_dev,
+			const struct fuse_iqueue_ops *fiq_ops, void *fiq_priv)
 {
 	memset(fc, 0, sizeof(*fc));
 	spin_lock_init(&fc->lock);
@@ -623,6 +624,7 @@ void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
 	fc->attr_version = 1;
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
 	fc->pid_ns = get_pid_ns(task_active_pid_ns(current));
+	fc->dax_dev = dax_dev;
 	fc->user_ns = get_user_ns(user_ns);
 }
 EXPORT_SYMBOL_GPL(fuse_conn_init);
@@ -1067,6 +1069,7 @@ EXPORT_SYMBOL_GPL(fuse_dev_free);
 
 int fuse_fill_super_common(struct super_block *sb,
 			   struct fuse_mount_data *mount_data,
+			   struct dax_device *dax_dev,
 			   const struct fuse_iqueue_ops *fiq_ops,
 			   void *fiq_priv,
 			   void **fudptr)
@@ -1116,7 +1119,7 @@ int fuse_fill_super_common(struct super_block *sb,
 	if (!fc)
 		goto err;
 
-	fuse_conn_init(fc, sb->s_user_ns, fiq_ops, fiq_priv);
+	fuse_conn_init(fc, sb->s_user_ns, dax_dev, fiq_ops, fiq_priv);
 	fc->release = fuse_free_conn;
 
 	fud = fuse_dev_alloc_install(fc);
@@ -1218,7 +1221,7 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 		goto err_fput;
 	__set_bit(FR_BACKGROUND, &init_req->flags);
 
-	err = fuse_fill_super_common(sb, &d, &fuse_dev_fiq_ops, NULL,
+	err = fuse_fill_super_common(sb, &d, NULL, &fuse_dev_fiq_ops, NULL,
 				     &file->private_data);
 	if (err < 0)
 		goto err_free_init_req;
