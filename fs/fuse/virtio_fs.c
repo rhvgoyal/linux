@@ -848,7 +848,8 @@ static int virtio_fs_fill_super(struct super_block *sb, void *data,
 		goto err;
 	__set_bit(FR_BACKGROUND, &init_req->flags);
 
-	err = fuse_fill_super_common(sb, &d, &virtio_fs_fiq_ops, fs,
+	err = fuse_fill_super_common(sb, &d, fs->dax_dev,
+				     &virtio_fs_fiq_ops, fs,
 				     (void **)&fs->vqs[2].fud);
 	if (err < 0)
 		goto err_free_init_req;
