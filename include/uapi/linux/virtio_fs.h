@@ -40,5 +40,6 @@ struct virtio_fs_config {
 
 /* For the id field in virtio_pci_shm_cap */
 #define VIRTIO_FS_SHMCAP_ID_CACHE 0
-
+#define VIRTIO_FS_SHMCAP_ID_VERTAB 1
+#define VIRTIO_FS_SHMCAP_ID_JOURNAL 2
 #endif /* _UAPI_LINUX_VIRTIO_FS_H */
