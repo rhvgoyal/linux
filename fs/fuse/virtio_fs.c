@@ -1142,6 +1142,8 @@ static int virtio_fs_fill_super(struct super_block *sb, void *data,
 	d.fiq_priv = fs;
 	d.fudptr = (void **)&fs->vqs[VQ_REQUEST].fud;
 	d.destroy = true; /* Send destroy request on unmount */
+	d.vertab_len = fs->vertab_len;
+	d.vertab_kaddr = fs->vertab_kaddr;
 	d.no_abort = 1;
 	err = fuse_fill_super_common(sb, &d);
 	if (err < 0)
