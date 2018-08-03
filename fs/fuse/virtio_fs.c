@@ -969,9 +969,11 @@ static int virtio_fs_fill_super(struct super_block *sb, void *data,
 		goto err;
 	__set_bit(FR_BACKGROUND, &init_req->flags);
 
-	err = fuse_fill_super_common(sb, &d, d.dax ? fs->dax_dev : NULL,
-				     &virtio_fs_fiq_ops, fs,
-				     (void **)&fs->vqs[2].fud);
+	d.dax_dev = d.dax ? fs->dax_dev : NULL;
+	d.fiq_ops = &virtio_fs_fiq_ops;
+	d.fiq_priv = fs;
+	d.fudptr = (void **)&fs->vqs[VQ_REQUEST].fud;
+	err = fuse_fill_super_common(sb, &d);
 	if (err < 0)
 		goto err_free_init_req;
 
