@@ -74,6 +74,18 @@ struct fuse_mount_data {
 	unsigned dax:1;
 	unsigned max_read;
 	unsigned blksize;
+
+	/* DAX device, may be NULL */
+	struct dax_device *dax_dev;
+
+	/* fuse input queue operations */
+	const struct fuse_iqueue_ops *fiq_ops;
+
+	/* device-specific state for fuse_iqueue */
+	void *fiq_priv;
+
+	/* fuse_dev pointer to fill in, should contain NULL on entry */
+	void **fudptr;
 };
 
 /* One forget request */
@@ -997,17 +1009,9 @@ int parse_fuse_opt(char *opt, struct fuse_mount_data *d, int is_bdev,
  * Fill in superblock and initialize fuse connection
  * @sb: partially-initialized superblock to fill in
  * @mount_data: mount parameters
- * @dax_dev: DAX device, may be NULL
- * @fiq_ops: fuse input queue operations
- * @fiq_priv: device-specific state for fuse_iqueue
- * @fudptr: fuse_dev pointer to fill in, should contain NULL on entry
  */
 int fuse_fill_super_common(struct super_block *sb,
-			   struct fuse_mount_data *mount_data,
-			   struct dax_device *dax_dev,
-			   const struct fuse_iqueue_ops *fiq_ops,
-			   void *fiq_priv,
-			   void **fudptr);
+			   struct fuse_mount_data *mount_data);
 void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req);
 
 /**

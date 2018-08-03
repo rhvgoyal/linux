@@ -1152,11 +1152,7 @@ void fuse_dev_free(struct fuse_dev *fud)
 EXPORT_SYMBOL_GPL(fuse_dev_free);
 
 int fuse_fill_super_common(struct super_block *sb,
-			   struct fuse_mount_data *mount_data,
-			   struct dax_device *dax_dev,
-			   const struct fuse_iqueue_ops *fiq_ops,
-			   void *fiq_priv,
-			   void **fudptr)
+			   struct fuse_mount_data *mount_data)
 {
 	struct fuse_dev *fud;
 	struct fuse_conn *fc;
@@ -1203,11 +1199,12 @@ int fuse_fill_super_common(struct super_block *sb,
 	if (!fc)
 		goto err;
 
-	fuse_conn_init(fc, sb->s_user_ns, dax_dev, fiq_ops, fiq_priv);
+	fuse_conn_init(fc, sb->s_user_ns, mount_data->dax_dev,
+			mount_data->fiq_ops, mount_data->fiq_priv);
 	fc->release = fuse_free_conn;
 
-	if (dax_dev) {
-		err = fuse_dax_mem_range_init(fc, dax_dev);
+	if (mount_data->dax_dev) {
+		err = fuse_dax_mem_range_init(fc, mount_data->dax_dev);
 		if (err) {
 			pr_debug("fuse_dax_mem_range_init() returned %d\n", err);
 			goto err_free_ranges;
@@ -1255,7 +1252,7 @@ int fuse_fill_super_common(struct super_block *sb,
 
 	mutex_lock(&fuse_mutex);
 	err = -EINVAL;
-	if (*fudptr)
+	if (*mount_data->fudptr)
 		goto err_unlock;
 
 	err = fuse_ctl_add_conn(fc);
@@ -1264,7 +1261,7 @@ int fuse_fill_super_common(struct super_block *sb,
 
 	list_add_tail(&fc->entry, &fuse_conn_list);
 	sb->s_root = root_dentry;
-	*fudptr = fud;
+	*mount_data->fudptr = fud;
 	mutex_unlock(&fuse_mutex);
 	return 0;
 
@@ -1275,7 +1272,7 @@ int fuse_fill_super_common(struct super_block *sb,
  err_dev_free:
 	fuse_dev_free(fud);
  err_free_ranges:
-	if (dax_dev)
+	if (mount_data->dax_dev)
 		fuse_free_dax_mem_ranges(&fc->free_ranges);
  err_put_conn:
 	fuse_conn_put(fc);
@@ -1316,8 +1313,11 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 		goto err_fput;
 	__set_bit(FR_BACKGROUND, &init_req->flags);
 
-	err = fuse_fill_super_common(sb, &d, NULL, &fuse_dev_fiq_ops, NULL,
-				     &file->private_data);
+	d.dax_dev = NULL;
+	d.fiq_ops = &fuse_dev_fiq_ops;
+	d.fiq_priv = NULL;
+	d.fudptr = &file->private_data;
+	err = fuse_fill_super_common(sb, &d);
 	if (err < 0)
 		goto err_free_init_req;
 	/*
