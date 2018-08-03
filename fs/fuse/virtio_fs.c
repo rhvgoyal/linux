@@ -58,6 +58,16 @@ struct virtio_fs {
 	void *window_kaddr;
 	phys_addr_t window_phys_addr;
 	size_t window_len;
+
+        /* Version table where version numbers can be read */
+	void *vertab_kaddr;
+	phys_addr_t vertab_phys_addr;
+	size_t vertab_len;
+
+        /* Journal */
+	void *journal_kaddr;
+	phys_addr_t journal_phys_addr;
+	size_t journal_len;
 };
 
 struct virtio_fs_forget {
@@ -618,6 +628,41 @@ static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 
 	dev_dbg(&vdev->dev, "%s: window kaddr 0x%px phys_addr 0x%llx len %llx\n",
 		__func__, fs->window_kaddr, cache_reg.addr, cache_reg.len);
+
+	/*
+	 * The journal and version table should be easier since DAX doesn't
+	 * need them
+	 */
+	if (have_journal) {
+		fs->journal_phys_addr = (phys_addr_t) journal_reg.addr;
+		fs->journal_len = (phys_addr_t) journal_reg.len;
+
+		fs->journal_kaddr = devm_memremap(&vdev->dev,
+						  fs->journal_phys_addr,
+						  journal_reg.len, MEMREMAP_WB);
+		if (!fs->journal_kaddr) {
+			dev_err(&vdev->dev, "%s: failed to remap journal\n",
+				__func__);
+			return -ENOMEM;
+		}
+		dev_notice(&vdev->dev, "%s: journal at %px\n", __func__,
+			   fs->journal_kaddr);
+	}
+
+	if (have_vertab) {
+		fs->vertab_phys_addr = (phys_addr_t) vertab_reg.addr;
+		fs->vertab_len = (phys_addr_t) vertab_reg.len;
+		fs->vertab_kaddr = devm_memremap(&vdev->dev,
+						 fs->vertab_phys_addr,
+						 vertab_reg.len, MEMREMAP_WB);
+		if (!fs->vertab_kaddr) {
+			dev_err(&vdev->dev, "%s: failed to remap version"
+				" table\n", __func__);
+			return -ENOMEM;
+		}
+		dev_notice(&vdev->dev, "%s: version table at %px\n",
+				__func__, fs->vertab_kaddr);
+	}
 
 	fs->dax_dev = alloc_dax(fs, NULL, &virtio_fs_dax_ops);
 	if (!fs->dax_dev)
