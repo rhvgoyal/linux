@@ -52,6 +52,7 @@ MODULE_PARM_DESC(max_user_congthresh,
  "unprivileged user can set");
 
 #define FUSE_SUPER_MAGIC 0x65735546
+#define VERSION_TABLE_MAGIC 0x7265566465726853
 
 #define FUSE_DEFAULT_BLKSIZE 512
 
@@ -1232,6 +1233,15 @@ int fuse_fill_super_common(struct super_block *sb,
 	fuse_conn_init(fc, sb->s_user_ns, mount_data->dax_dev,
 			mount_data->fiq_ops, mount_data->fiq_priv);
 	fc->release = fuse_free_conn;
+	fc->version_table_size = mount_data->vertab_len / sizeof(s64);
+	fc->version_table = mount_data->vertab_kaddr;
+
+	if (fc->version_table[0] != VERSION_TABLE_MAGIC) {
+		pr_warn("bad version table magic: 0x%16llx\n",
+			fc->version_table[0]);
+		fc->version_table_size = 0;
+		fc->version_table = NULL;
+	}
 
 	if (mount_data->dax_dev) {
 		err = fuse_dax_mem_range_init(fc, mount_data->dax_dev);

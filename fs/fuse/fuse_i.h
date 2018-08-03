@@ -100,6 +100,12 @@ struct fuse_mount_data {
 
 	/* fuse_dev pointer to fill in, should contain NULL on entry */
 	void **fudptr;
+
+	/* version table length in bytes */
+	size_t vertab_len;
+
+	/* version table kernel address */
+	void *vertab_kaddr;
 };
 
 /* One forget request */
@@ -898,6 +904,12 @@ struct fuse_conn {
 	struct list_head free_ranges;
 
 	unsigned long nr_ranges;
+
+	/** Size of version table */
+	uint64_t version_table_size;
+
+	/** Shared version entry for each active inode */
+	s64 *version_table;
 };
 
 static inline struct fuse_conn *get_fuse_conn_super(struct super_block *sb)
