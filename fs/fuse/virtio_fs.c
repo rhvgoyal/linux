@@ -509,10 +509,10 @@ static void virtio_fs_cleanup_dax(void *data)
 
 static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 {
-	struct virtio_shm_region cache_reg;
+	struct virtio_shm_region cache_reg, journal_reg, vertab_reg;
 	struct virtio_fs_memremap_info *mi;
 	struct dev_pagemap *pgmap;
-	bool have_cache;
+	bool have_cache, have_journal, have_vertab;
 	int ret;
 
 	if (!IS_ENABLED(CONFIG_DAX_DRIVER))
@@ -528,6 +528,22 @@ static int virtio_fs_setup_dax(struct virtio_device *vdev, struct virtio_fs *fs)
 	} else {
 		dev_notice(&vdev->dev, "Cache len: 0x%llx @ 0x%llx\n",
 			   cache_reg.len, cache_reg.addr);
+	}
+
+	/* Get journal region */
+	have_journal = virtio_get_shm_region(vdev, &journal_reg,
+					     (u8)VIRTIO_FS_SHMCAP_ID_JOURNAL);
+	if (have_journal) {
+		dev_notice(&vdev->dev, "Journal len: 0x%llx @ 0x%llx\n",
+			   journal_reg.len, journal_reg.addr);
+	}
+
+	/* Get version table region */
+	have_vertab = virtio_get_shm_region(vdev, &vertab_reg,
+					    (u8)VIRTIO_FS_SHMCAP_ID_VERTAB);
+	if (have_vertab) {
+		dev_notice(&vdev->dev, "Version table len: 0x%llx @ 0x%llx\n",
+			   vertab_reg.len, vertab_reg.addr);
 	}
 
 	mi = devm_kzalloc(&vdev->dev, sizeof(*mi), GFP_KERNEL);
