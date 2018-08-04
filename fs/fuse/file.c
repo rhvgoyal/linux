@@ -487,6 +487,28 @@ void fuse_cleanup_inode_mappings(struct inode *inode)
 	inode_reclaim_dmap_range(fc, inode, 0, -1);
 }
 
+s64 fuse_update_attr_version_locked(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	s64 curr_version = 0;
+
+	if (!fi->version_ptr) {
+		struct fuse_conn *fc = get_fuse_conn(inode);
+
+		curr_version = fi->attr_ctr = atomic64_inc_return(&fc->attr_ctr);
+	}
+	return curr_version;
+}
+
+static void fuse_update_attr_version(struct inode *inode)
+{
+	struct fuse_conn *fc = get_fuse_conn(inode);
+
+	spin_lock(&fc->lock);
+	fuse_update_attr_version_locked(inode);
+	spin_unlock(&fc->lock);
+}
+
 void fuse_finish_open(struct inode *inode, struct file *file)
 {
 	struct fuse_file *ff = file->private_data;
@@ -500,7 +522,7 @@ void fuse_finish_open(struct inode *inode, struct file *file)
 		struct fuse_inode *fi = get_fuse_inode(inode);
 
 		spin_lock(&fi->lock);
-		fi->attr_version = atomic64_inc_return(&fc->attr_version);
+		fuse_update_attr_version_locked(inode);
 		i_size_write(inode, 0);
 		spin_unlock(&fi->lock);
 		fuse_invalidate_attr(inode);
@@ -932,15 +954,8 @@ static void fuse_aio_complete(struct fuse_io_priv *io, int err, ssize_t pos)
 	if (!left && !io->blocking) {
 		ssize_t res = fuse_get_res_by_io(io);
 
-		if (res >= 0) {
-			struct inode *inode = file_inode(io->iocb->ki_filp);
-			struct fuse_conn *fc = get_fuse_conn(inode);
-			struct fuse_inode *fi = get_fuse_inode(inode);
-
-			spin_lock(&fi->lock);
-			fi->attr_version = atomic64_inc_return(&fc->attr_version);
-			spin_unlock(&fi->lock);
-		}
+		if (res >= 0)
+			fuse_update_attr_version(file_inode(io->iocb->ki_filp));
 
 		io->iocb->ki_complete(io->iocb, res, 0);
 	}
@@ -1009,22 +1024,21 @@ static size_t fuse_send_read(struct fuse_req *req, struct fuse_io_priv *io,
 }
 
 static void fuse_read_update_size(struct inode *inode, loff_t size,
-				  u64 attr_ver)
+				  s64 attr_ver)
 {
-	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
 	spin_lock(&fi->lock);
-	if (attr_ver == fi->attr_version && size < inode->i_size &&
+	if (attr_ver == fi->attr_ctr && size < inode->i_size &&
 	    !test_bit(FUSE_I_SIZE_UNSTABLE, &fi->state)) {
-		fi->attr_version = atomic64_inc_return(&fc->attr_version);
+		fuse_update_attr_version_locked(inode);
 		i_size_write(inode, size);
 	}
 	spin_unlock(&fi->lock);
 }
 
 static void fuse_short_read(struct fuse_req *req, struct inode *inode,
-			    u64 attr_ver)
+			    s64 attr_ver)
 {
 	size_t num_read = req->out.args[0].size;
 	struct fuse_conn *fc = get_fuse_conn(inode);
@@ -1059,7 +1073,7 @@ static int fuse_do_readpage(struct file *file, struct page *page)
 	size_t num_read;
 	loff_t pos = page_offset(page);
 	size_t count = PAGE_SIZE;
-	u64 attr_ver;
+	s64 attr_ver;
 	int err;
 
 	/*
@@ -1073,7 +1087,7 @@ static int fuse_do_readpage(struct file *file, struct page *page)
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
-	attr_ver = fuse_get_attr_version(fc);
+	attr_ver = fuse_get_attr_version(inode);
 
 	req->out.page_zeroing = 1;
 	req->out.argpages = 1;
@@ -1162,7 +1176,7 @@ static void fuse_send_readpages(struct fuse_req *req, struct file *file)
 	req->out.page_zeroing = 1;
 	req->out.page_replace = 1;
 	fuse_read_fill(req, file, pos, count, FUSE_READ);
-	req->misc.read.attr_ver = fuse_get_attr_version(fc);
+	req->misc.read.attr_ver = fuse_get_attr_version(file_inode(file));
 	if (fc->async_read) {
 		req->ff = fuse_file_get(ff);
 		req->end = fuse_readpages_end;
@@ -1331,12 +1345,11 @@ static size_t fuse_send_write(struct fuse_req *req, struct fuse_io_priv *io,
 
 bool fuse_write_update_size(struct inode *inode, loff_t pos)
 {
-	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	bool ret = false;
 
 	spin_lock(&fi->lock);
-	fi->attr_version = atomic64_inc_return(&fc->attr_version);
+	fuse_update_attr_version_locked(inode);
 	if (pos > inode->i_size) {
 		i_size_write(inode, pos);
 		ret = true;
