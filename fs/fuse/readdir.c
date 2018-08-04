@@ -147,7 +147,7 @@ static int parse_dirfile(char *buf, size_t nbytes, struct file *file,
 
 static int fuse_direntplus_link(struct file *file,
 				struct fuse_direntplus *direntplus,
-				u64 attr_version)
+				s64 attr_version)
 {
 	struct fuse_entry_out *o = &direntplus->entry_out;
 	struct fuse_dirent *dirent = &direntplus->dirent;
@@ -212,6 +212,9 @@ retry:
 			return -EIO;
 		}
 
+		/* FIXME: translate version_ptr on reading from device... */
+		/* fuse_set_version_ptr(inode, o); */
+
 		fi = get_fuse_inode(inode);
 		spin_lock(&fc->lock);
 		fi->nlookup++;
@@ -231,6 +234,7 @@ retry:
 				  attr_version);
 		if (!inode)
 			inode = ERR_PTR(-ENOMEM);
+		/* else fuse_set_version_ptr(inode, o); */
 
 		alias = d_splice_alias(inode, dentry);
 		d_lookup_done(dentry);
@@ -250,7 +254,7 @@ retry:
 }
 
 static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
-			     struct dir_context *ctx, u64 attr_version)
+			     struct dir_context *ctx, s64 attr_version)
 {
 	struct fuse_direntplus *direntplus;
 	struct fuse_dirent *dirent;
@@ -301,7 +305,7 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 	struct inode *inode = file_inode(file);
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_req *req;
-	u64 attr_version = 0;
+	s64 attr_version = 0;
 	bool locked;
 
 	req = fuse_get_req(fc, 1);
@@ -320,7 +324,7 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 	req->pages[0] = page;
 	req->page_descs[0].length = PAGE_SIZE;
 	if (plus) {
-		attr_version = fuse_get_attr_version(fc);
+		attr_version = fuse_get_attr_version(inode);
 		fuse_read_fill(req, file, ctx->pos, PAGE_SIZE,
 			       FUSE_READDIRPLUS);
 	} else {

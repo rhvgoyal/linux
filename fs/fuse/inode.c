@@ -82,6 +82,8 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->nodeid = 0;
 	fi->nlookup = 0;
 	fi->attr_version = 0;
+	fi->state = 0;
+	fi->version_ptr = NULL;
 	fi->orig_ino = 0;
 	fi->state = 0;
 	fi->nr_dmaps = 0;
@@ -153,12 +155,11 @@ static ino_t fuse_squash_ino(u64 ino64)
 }
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
-				   u64 attr_valid)
+				   u64 attr_valid, s64 attr_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
-	fi->attr_version = ++fc->attr_version;
 	fi->i_time = attr_valid;
 	WRITE_ONCE(fi->inval_mask, 0);
 
@@ -193,10 +194,13 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 		inode->i_mode &= ~S_ISVTX;
 
 	fi->orig_ino = attr->ino;
+	smp_wmb();
+	WRITE_ONCE(fi->attr_version, attr_version);
+
 }
 
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
-			    u64 attr_valid, u64 attr_version)
+			    u64 attr_valid, s64 attr_version)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -205,14 +209,17 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	struct timespec64 old_mtime;
 
 	spin_lock(&fc->lock);
-	if ((attr_version != 0 && fi->attr_version > attr_version) ||
-	    test_bit(FUSE_I_SIZE_UNSTABLE, &fi->state)) {
+	if (test_bit(FUSE_I_SIZE_UNSTABLE, &fi->state)) {
+		spin_unlock(&fc->lock);
+		return;
+	}
+	if (attr_version != 0 && fi->attr_version > attr_version) {
 		spin_unlock(&fc->lock);
 		return;
 	}
 
 	old_mtime = inode->i_mtime;
-	fuse_change_attributes_common(inode, attr, attr_valid);
+	fuse_change_attributes_common(inode, attr, attr_valid, attr_version);
 
 	oldsize = inode->i_size;
 	/*
@@ -291,7 +298,7 @@ static int fuse_inode_set(struct inode *inode, void *_nodeidp)
 
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
-			u64 attr_valid, u64 attr_version)
+			u64 attr_valid, s64 attr_version)
 {
 	struct inode *inode;
 	struct fuse_inode *fi;
@@ -709,7 +716,7 @@ void fuse_conn_init(struct fuse_conn *fc, struct user_namespace *user_ns,
 	fc->blocked = 0;
 	fc->initialized = 0;
 	fc->connected = 1;
-	fc->attr_version = 1;
+	fc->attr_ctr = 1;
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
 	fc->pid_ns = get_pid_ns(task_active_pid_ns(current));
 	fc->dax_dev = dax_dev;
