@@ -172,7 +172,7 @@ struct fuse_inode {
 	u64 orig_ino;
 
 	/** Version of last attribute change */
-	u64 attr_version;
+	s64 attr_version;
 
 	union {
 		/* Write related fields (regular file only) */
@@ -223,7 +223,7 @@ struct fuse_inode {
 	/** Miscellaneous bits describing inode state */
 	unsigned long state;
 
-	/** Lock for serializing lookup and readdir for back compatibility*/
+	/** Lock for serializing lookup and readdir for back compatibility */
 	struct mutex mutex;
 
 	/*
@@ -241,6 +241,9 @@ struct fuse_inode {
 	/** Sorted rb tree of struct fuse_dax_mapping elements */
 	struct rb_root_cached dmap_tree;
 	unsigned long nr_dmaps;
+
+	/** Pointer to shared version */
+	s64 *version_ptr;
 };
 
 /** FUSE inode state bits */
@@ -364,7 +367,7 @@ struct fuse_out {
 	unsigned numargs;
 
 	/** Array of arguments */
-	struct fuse_arg args[2];
+	struct fuse_arg args[3];
 };
 
 /** FUSE page descriptor */
@@ -386,7 +389,7 @@ struct fuse_args {
 	struct {
 		unsigned argvar:1;
 		unsigned numargs;
-		struct fuse_arg args[2];
+		struct fuse_arg args[3];
 	} out;
 };
 
@@ -486,7 +489,7 @@ struct fuse_req {
 		struct cuse_init_in cuse_init_in;
 		struct {
 			struct fuse_read_in in;
-			u64 attr_ver;
+			s64 attr_ver;
 		} read;
 		struct {
 			struct fuse_write_in in;
@@ -869,7 +872,7 @@ struct fuse_conn {
 	struct fuse_req *destroy_req;
 
 	/** Version counter for attribute changes */
-	u64 attr_version;
+	s64 attr_ctr;
 
 	/** Called on final put */
 	void (*release)(struct fuse_conn *);
@@ -953,7 +956,7 @@ int fuse_inode_eq(struct inode *inode, void *_nodeidp);
  */
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
-			u64 attr_valid, u64 attr_version);
+			u64 attr_valid, s64 attr_version);
 
 int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name,
 		     struct fuse_entry_out *outarg, struct inode **inode);
@@ -1027,10 +1030,10 @@ void fuse_init_symlink(struct inode *inode);
  * Change attributes of an inode
  */
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
-			    u64 attr_valid, u64 attr_version);
+			    u64 attr_valid, s64 attr_version);
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
-				   u64 attr_valid);
+				   u64 attr_valid, s64 attr_version);
 
 /**
  * Initialize the client device
@@ -1198,7 +1201,7 @@ void fuse_flush_writepages(struct inode *inode);
 void fuse_set_nowrite(struct inode *inode);
 void fuse_release_nowrite(struct inode *inode);
 
-u64 fuse_get_attr_version(struct fuse_conn *fc);
+s64 fuse_get_attr_version(struct inode *inode);
 
 /**
  * File-system tells the kernel to invalidate cache for the given node id.
@@ -1283,5 +1286,7 @@ unsigned fuse_len_args(unsigned numargs, struct fuse_arg *args);
 u64 fuse_get_unique(struct fuse_iqueue *fiq);
 void fuse_dax_free_mem_worker(struct work_struct *work);
 void fuse_removemapping(struct inode *inode);
+
+s64 fuse_update_attr_version_locked(struct inode *inode);
 
 #endif /* _FS_FUSE_I_H */
