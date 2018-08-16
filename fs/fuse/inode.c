@@ -1236,7 +1236,8 @@ int fuse_fill_super_common(struct super_block *sb,
 	fc->version_table_size = mount_data->vertab_len / sizeof(s64);
 	fc->version_table = mount_data->vertab_kaddr;
 
-	if (fc->version_table[0] != VERSION_TABLE_MAGIC) {
+	if (fc->version_table && fc->version_table_size > 0 &&
+	    fc->version_table[0] != VERSION_TABLE_MAGIC) {
 		pr_warn("bad version table magic: 0x%16llx\n",
 			fc->version_table[0]);
 		fc->version_table_size = 0;
