@@ -28,6 +28,9 @@ INTERVAL_TREE_DEFINE(struct fuse_dax_mapping,
                      rb, __u64, __subtree_last,
                      START, LAST, static inline, fuse_dax_interval_tree);
 
+static long __fuse_file_fallocate(struct file *file, int mode,
+					loff_t offset, loff_t length);
+
 static int fuse_send_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 			  int opcode, struct fuse_open_out *outargp)
 {
@@ -1823,6 +1826,22 @@ static ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	/* TODO file_update_time() but we don't want metadata I/O */
 
 	/* TODO handle growing the file */
+	/* Grow file here if need be. iomap_begin() does not have access
+	 * to file pointer
+	 */
+	if (iov_iter_rw(from) == WRITE &&
+	    ((iocb->ki_pos + iov_iter_count(from)) > i_size_read(inode))) {
+		ret = __fuse_file_fallocate(iocb->ki_filp, 0, iocb->ki_pos,
+						iov_iter_count(from));
+		if (ret < 0) {
+			printk("fallocate(offset=0x%llx length=0x%lx)"
+			" failed. err=%ld\n", iocb->ki_pos,
+			iov_iter_count(from), ret);
+			goto out;
+		}
+		pr_debug("fallocate(offset=0x%llx length=0x%lx)"
+		" succeed. ret=%ld\n", iocb->ki_pos, iov_iter_count(from), ret);
+	}
 
 	ret = dax_iomap_rw(iocb, from, &fuse_iomap_ops);
 
@@ -3335,8 +3354,12 @@ fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 	return ret;
 }
 
-static long fuse_file_fallocate(struct file *file, int mode, loff_t offset,
-				loff_t length)
+/*
+ * This variant does not take any inode lock and if locking is required,
+ * caller is supposed to hold lock
+ */
+static long __fuse_file_fallocate(struct file *file, int mode,
+					loff_t offset, loff_t length)
 {
 	struct fuse_file *ff = file->private_data;
 	struct inode *inode = file_inode(file);
@@ -3350,8 +3373,6 @@ static long fuse_file_fallocate(struct file *file, int mode, loff_t offset,
 		.mode = mode
 	};
 	int err;
-	bool lock_inode = !(mode & FALLOC_FL_KEEP_SIZE) ||
-			   (mode & FALLOC_FL_PUNCH_HOLE);
 
 	if (mode & ~(FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE))
 		return -EOPNOTSUPP;
@@ -3359,17 +3380,13 @@ static long fuse_file_fallocate(struct file *file, int mode, loff_t offset,
 	if (fc->no_fallocate)
 		return -EOPNOTSUPP;
 
-	if (lock_inode) {
-		inode_lock(inode);
-		if (mode & FALLOC_FL_PUNCH_HOLE) {
-			loff_t endbyte = offset + length - 1;
-			err = filemap_write_and_wait_range(inode->i_mapping,
-							   offset, endbyte);
-			if (err)
-				goto out;
-
-			fuse_sync_writes(inode);
-		}
+	if (mode & FALLOC_FL_PUNCH_HOLE) {
+		loff_t endbyte = offset + length - 1;
+		err = filemap_write_and_wait_range(inode->i_mapping, offset,
+							endbyte);
+		if (err)
+			goto out;
+		fuse_sync_writes(inode);
 	}
 
 	if (!(mode & FALLOC_FL_KEEP_SIZE))
@@ -3405,9 +3422,31 @@ out:
 	if (!(mode & FALLOC_FL_KEEP_SIZE))
 		clear_bit(FUSE_I_SIZE_UNSTABLE, &fi->state);
 
+	return err;
+}
+
+static long fuse_file_fallocate(struct file *file, int mode, loff_t offset,
+				loff_t length)
+{
+	struct fuse_file *ff = file->private_data;
+	struct inode *inode = file_inode(file);
+	struct fuse_conn *fc = ff->fc;
+	int err;
+	bool lock_inode = !(mode & FALLOC_FL_KEEP_SIZE) ||
+			   (mode & FALLOC_FL_PUNCH_HOLE);
+
+	if (mode & ~(FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE))
+		return -EOPNOTSUPP;
+
+	if (fc->no_fallocate)
+		return -EOPNOTSUPP;
+
+	if (lock_inode)
+		inode_lock(inode);
+
+	err = __fuse_file_fallocate(file, mode, offset, length);
 	if (lock_inode)
 		inode_unlock(inode);
-
 	return err;
 }
 
