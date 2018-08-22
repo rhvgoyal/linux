@@ -253,29 +253,36 @@ static bool fuse_dentry_version_mismatch(struct dentry *dentry)
 	return fuse_version_mismatch(inode, READ_ONCE(fude->version));
 }
 
-static void fuse_set_version_ptr(struct inode *inode,
-			      struct fuse_entryver_out *outver)
+static s64 *fuse_version_ptr(struct inode *inode,
+			     struct fuse_entryver_out *outver)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
-	struct fuse_inode *fi = get_fuse_inode(inode);
 
-	if (!fc->version_table || !outver->version_index) {
-		fi->version_ptr = NULL;
-		return;
-	}
+	if (!fc->version_table || !outver->version_index)
+		return NULL;
+
 	if (outver->version_index >= fc->version_table_size) {
 		pr_warn_ratelimited("version index too large (%llu >= %llu)\n",
 				    outver->version_index,
 				    fc->version_table_size);
-		fi->version_ptr = NULL;
-		return;
+		return NULL;
 	}
 
-	fi->version_ptr = fc->version_table + outver->version_index;
+	return fc->version_table + outver->version_index;
+}
 
-	pr_info("fuse: version_ptr = %p\n", fi->version_ptr);
-	pr_info("fuse: version = %lli\n", fi->attr_version);
-	pr_info("fuse: current_version: %lli\n", *fi->version_ptr);
+static void fuse_set_version_ptr(struct inode *inode,
+			      struct fuse_entryver_out *outver)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	fi->version_ptr = fuse_version_ptr(inode, outver);
+
+	if (fi->version_ptr) {
+		pr_info("fuse: version_ptr = %p\n", fi->version_ptr);
+		pr_info("fuse: version = %lli\n", fi->attr_version);
+		pr_info("fuse: current_version: %lli\n", *fi->version_ptr);
+	}
 }
 
 /*
@@ -335,13 +342,16 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 		if (!ret && !outarg.nodeid)
 			ret = -ENOENT;
 		if (!ret) {
+			s64 *new_version_ptr = fuse_version_ptr(inode, &outver);
+
 			fi = get_fuse_inode(inode);
 			if (outarg.nodeid != get_node_id(inode)) {
 				fuse_queue_forget(fc, forget, outarg.nodeid, 1);
 				goto invalid;
 			}
-			if (fi->version_ptr != fc->version_table + outver.version_index)
-				pr_warn("fuse_dentry_revalidate: version_ptr changed (%p -> %p)\n", fi->version_ptr, fc->version_table + outver.version_index);
+			if (fi->version_ptr != new_version_ptr) {
+				pr_warn("fuse_dentry_revalidate: version_ptr changed (%p -> %p)\n", fi->version_ptr, new_version_ptr);
+			}
 
 			spin_lock(&fc->lock);
 			fi->nlookup++;
