@@ -958,7 +958,7 @@ static int
 ext2_dax_writepages(struct address_space *mapping, struct writeback_control *wbc)
 {
 	return dax_writeback_mapping_range(mapping,
-			mapping->host->i_sb->s_bdev, wbc);
+			mapping->host->i_sb->s_bdev, NULL, wbc);
 }
 
 const struct address_space_operations ext2_aops = {
