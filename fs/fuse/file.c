@@ -37,6 +37,8 @@ static struct page **fuse_pages_alloc(unsigned int npages, gfp_t flags,
 	return pages;
 }
 
+static struct fuse_dax_mapping *alloc_dax_mapping_reclaim(struct fuse_conn *fc,
+				struct inode *inode);
 static int fuse_send_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 			  int opcode, struct fuse_open_out *outargp)
 {
@@ -193,6 +195,28 @@ static void fuse_link_write_file(struct file *file)
 	spin_unlock(&fi->lock);
 }
 
+static void
+__kick_dmap_free_worker(struct fuse_conn *fc, unsigned long delay_ms)
+{
+	unsigned long free_threshold;
+
+	/* If number of free ranges are below threshold, start reclaim */
+	free_threshold = max((fc->nr_ranges * FUSE_DAX_RECLAIM_THRESHOLD)/100,
+				(unsigned long)1);
+	if (fc->nr_free_ranges < free_threshold) {
+		pr_debug("fuse: Kicking dax memory reclaim worker. nr_free_ranges=0x%ld nr_total_ranges=%ld\n", fc->nr_free_ranges, fc->nr_ranges);
+		queue_delayed_work(system_long_wq, &fc->dax_free_work,
+				   msecs_to_jiffies(delay_ms));
+	}
+}
+
+static void kick_dmap_free_worker(struct fuse_conn *fc, unsigned long delay_ms)
+{
+	spin_lock(&fc->lock);
+	__kick_dmap_free_worker(fc, delay_ms);
+	spin_unlock(&fc->lock);
+}
+
 static struct fuse_dax_mapping *alloc_dax_mapping(struct fuse_conn *fc)
 {
 	struct fuse_dax_mapping *dmap = NULL;
@@ -202,7 +226,7 @@ static struct fuse_dax_mapping *alloc_dax_mapping(struct fuse_conn *fc)
 	/* TODO: Add logic to try to free up memory if wait is allowed */
 	if (fc->nr_free_ranges <= 0) {
 		spin_unlock(&fc->lock);
-		return NULL;
+		goto out_kick;
 	}
 
 	WARN_ON(list_empty(&fc->free_ranges));
@@ -213,6 +237,9 @@ static struct fuse_dax_mapping *alloc_dax_mapping(struct fuse_conn *fc)
 	list_del_init(&dmap->list);
 	fc->nr_free_ranges--;
 	spin_unlock(&fc->lock);
+
+out_kick:
+	kick_dmap_free_worker(fc, 0);
 	return dmap;
 }
 
@@ -239,6 +266,8 @@ static void __dmap_add_to_free_pool(struct fuse_conn *fc,
 {
 	list_add_tail(&dmap->list, &fc->free_ranges);
 	fc->nr_free_ranges++;
+	/* TODO: Wake up only when needed */
+	wake_up(&fc->dax_range_waitq);
 }
 
 static void dmap_add_to_free_pool(struct fuse_conn *fc,
@@ -290,9 +319,15 @@ static int fuse_setup_one_mapping(struct inode *inode, loff_t offset,
 
 	dmap->writable = writable;
 	if (!upgrade) {
-		/* TODO: What locking is required here. For now,
-		 * using fc->lock
+		/*
+		 * We don't take a refernce on inode. inode is valid right now
+		 * and when inode is going away, cleanup logic should first
+		 * cleanup dmap entries.
+		 *
+		 * TODO: Do we need to ensure that we are holding inode lock
+		 * as well.
 		 */
+		dmap->inode = inode;
 		dmap->start = offset;
 		dmap->end = offset + FUSE_DAX_MEM_RANGE_SZ - 1;
 		/* Protected by fi->i_dmap_sem */
@@ -372,6 +407,7 @@ static void dmap_reinit_add_to_free_pool(struct fuse_conn *fc,
 		 "window_offset=0x%llx length=0x%llx\n", dmap->start,
 		 dmap->end, dmap->window_offset, dmap->length);
 	__dmap_remove_busy_list(fc, dmap);
+	dmap->inode = NULL;
 	dmap->start = dmap->end = 0;
 	__dmap_add_to_free_pool(fc, dmap);
 }
@@ -438,6 +474,22 @@ static void inode_reclaim_dmap_range(struct fuse_conn *fc, struct inode *inode,
 		dmap_reinit_add_to_free_pool(fc, dmap);
 	}
 	spin_unlock(&fc->lock);
+}
+
+static int dmap_removemapping_one(struct inode *inode,
+				  struct fuse_dax_mapping *dmap)
+{
+	struct fuse_removemapping_one forget_one;
+	struct fuse_removemapping_in inarg;
+
+	memset(&inarg, 0, sizeof(inarg));
+	/* TODO: fill in inarg.fh when available */
+	inarg.count = 1;
+	memset(&forget_one, 0, sizeof(forget_one));
+	forget_one.moffset = dmap->window_offset;
+	forget_one.len = dmap->length;
+
+	return fuse_send_removemapping(inode, &inarg, &forget_one);
 }
 
 /*
@@ -1898,8 +1950,23 @@ static int iomap_begin_setup_new_mapping(struct inode *inode, loff_t pos,
 	int ret;
 	bool writable = flags & IOMAP_WRITE;
 
-	alloc_dmap = alloc_dax_mapping(fc);
-	if (!alloc_dmap)
+	/* Can't do reclaim in fault path yet due to lock ordering.
+	 * Read path takes shared inode lock and that's not sufficient
+	 * for inline range reclaim. Caller needs to drop lock, wait
+	 * and retry.
+	 */
+	if (flags & IOMAP_FAULT || !(flags & IOMAP_WRITE)) {
+		alloc_dmap = alloc_dax_mapping(fc);
+		if (!alloc_dmap)
+			return -ENOSPC;
+	} else {
+		alloc_dmap = alloc_dax_mapping_reclaim(fc, inode);
+		if (IS_ERR(alloc_dmap))
+			return PTR_ERR(alloc_dmap);
+	}
+
+	/* If we are here, we should have memory allocated */
+	if (WARN_ON(!alloc_dmap))
 		return -EBUSY;
 
 	/*
@@ -2078,7 +2145,18 @@ static const struct iomap_ops fuse_iomap_ops = {
 static ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
+	struct fuse_conn *fc = get_fuse_conn(inode);
 	ssize_t ret;
+	bool retry = false;
+
+retry:
+	if (retry && !(fc->nr_free_ranges > 0)) {
+		ret = -EINTR;
+		if (wait_event_killable_exclusive(fc->dax_range_waitq,
+						  (fc->nr_free_ranges > 0))) {
+			goto out;
+		}
+	}
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
 		if (!inode_trylock_shared(inode))
@@ -2090,8 +2168,19 @@ static ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	ret = dax_iomap_rw(iocb, to, &fuse_iomap_ops);
 	inode_unlock_shared(inode);
 
+	/* If a dax range could not be allocated and it can't be reclaimed
+	 * inline, then drop inode lock and retry. Range reclaim logic
+	 * requires exclusive access to inode lock.
+	 *
+	 * TODO: What if -ENOSPC needs to be returned to user space. Fix it.
+	 */
+	if (ret == -ENOSPC) {
+		retry = true;
+		goto retry;
+	}
 	/* TODO file_accessed(iocb->f_filp) */
 
+out:
 	return ret;
 }
 
@@ -2922,9 +3011,20 @@ static int __fuse_dax_fault(struct vm_fault *vmf, enum page_entry_size pe_size,
 	struct inode *inode = file_inode(vmf->vma->vm_file);
 	struct super_block *sb = inode->i_sb;
 	pfn_t pfn;
+	int error = 0;
+	struct fuse_conn *fc = get_fuse_conn(inode);
+	bool retry = false;
 
 	if (write)
 		sb_start_pagefault(sb);
+
+retry:
+	if (retry && !(fc->nr_free_ranges > 0)) {
+		ret = -EINTR;
+		if (wait_event_killable_exclusive(fc->dax_range_waitq,
+					(fc->nr_free_ranges > 0)))
+			goto out;
+	}
 
 	/*
 	 * We need to serialize against not only truncate but also against
@@ -2933,13 +3033,20 @@ static int __fuse_dax_fault(struct vm_fault *vmf, enum page_entry_size pe_size,
 	 * to populate page cache or access memory we are trying to free.
 	 */
 	down_read(&get_fuse_inode(inode)->i_mmap_sem);
-	ret = dax_iomap_fault(vmf, pe_size, &pfn, NULL, &fuse_iomap_ops);
+	ret = dax_iomap_fault(vmf, pe_size, &pfn, &error, &fuse_iomap_ops);
+	if ((ret & VM_FAULT_ERROR) && error == -ENOSPC) {
+		error = 0;
+		retry = true;
+		up_read(&get_fuse_inode(inode)->i_mmap_sem);
+		goto retry;
+	}
 
 	if (ret & VM_FAULT_NEEDDSYNC)
 		ret = dax_finish_sync_fault(vmf, pe_size, pfn);
 
 	up_read(&get_fuse_inode(inode)->i_mmap_sem);
 
+out:
 	if (write)
 		sb_end_pagefault(sb);
 
@@ -4078,4 +4185,270 @@ void fuse_init_file_inode(struct inode *inode)
 		inode->i_flags |= S_DAX;
 		inode->i_data.a_ops = &fuse_dax_file_aops;
 	}
+}
+
+static int dmap_writeback_invalidate(struct inode *inode,
+				     struct fuse_dax_mapping *dmap)
+{
+	int ret;
+
+	ret = filemap_fdatawrite_range(inode->i_mapping, dmap->start,
+				       dmap->end);
+	if (ret) {
+		printk("filemap_fdatawrite_range() failed. err=%d start=0x%llx,"
+			" end=0x%llx\n", ret, dmap->start, dmap->end);
+		return ret;
+	}
+
+	ret = invalidate_inode_pages2_range(inode->i_mapping,
+					    dmap->start >> PAGE_SHIFT,
+					    dmap->end >> PAGE_SHIFT);
+	if (ret)
+		printk("invalidate_inode_pages2_range() failed err=%d\n", ret);
+
+	return ret;
+}
+
+static int reclaim_one_dmap_locked(struct fuse_conn *fc, struct inode *inode,
+				   struct fuse_dax_mapping *dmap)
+{
+	int ret;
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	ret = dmap_writeback_invalidate(inode, dmap);
+
+	/* TODO: What to do if above fails? For now,
+	 * leave the range in place.
+	 */
+	if (ret)
+		return ret;
+
+	/* Remove dax mapping from inode interval tree now */
+	fuse_dax_interval_tree_remove(dmap, &fi->dmap_tree);
+	fi->nr_dmaps--;
+
+	ret = dmap_removemapping_one(inode, dmap);
+	if (ret) {
+		pr_warn("Failed to remove mapping. offset=0x%llx len=0x%llx\n",
+			dmap->window_offset, dmap->length);
+	}
+
+	return 0;
+}
+
+/* First first mapping in the tree and free it. */
+static struct fuse_dax_mapping *
+inode_reclaim_first_dmap_locked(struct fuse_conn *fc, struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	struct fuse_dax_mapping *dmap;
+	int ret;
+
+	/* Find fuse dax mapping at file offset inode. */
+	dmap = fuse_dax_interval_tree_iter_first(&fi->dmap_tree, 0, -1);
+	if (!dmap)
+		return NULL;
+
+	ret = reclaim_one_dmap_locked(fc, inode, dmap);
+	if (ret < 0)
+		return ERR_PTR(ret);
+
+	/* Clean up dmap. Do not add back to free list */
+	dmap_remove_busy_list(fc, dmap);
+	dmap->inode = NULL;
+	dmap->start = dmap->end = 0;
+
+	pr_debug("fuse: reclaimed memory range window_offset=0x%llx,"
+				" length=0x%llx\n", dmap->window_offset,
+				dmap->length);
+	return dmap;
+}
+
+/*
+ * First first mapping in the tree and free it and return it. Do not add
+ * it back to free pool.
+ *
+ * This is called with inode lock held.
+ */
+static struct fuse_dax_mapping *inode_reclaim_first_dmap(struct fuse_conn *fc,
+							 struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	struct fuse_dax_mapping *dmap;
+
+	down_write(&fi->i_mmap_sem);
+	down_write(&fi->i_dmap_sem);
+	dmap = inode_reclaim_first_dmap_locked(fc, inode);
+	up_write(&fi->i_dmap_sem);
+	up_write(&fi->i_mmap_sem);
+	return dmap;
+}
+
+static struct fuse_dax_mapping *alloc_dax_mapping_reclaim(struct fuse_conn *fc,
+					struct inode *inode)
+{
+	struct fuse_dax_mapping *dmap;
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	while(1) {
+		dmap = alloc_dax_mapping(fc);
+		if (dmap)
+			return dmap;
+
+		if (fi->nr_dmaps) {
+			dmap = inode_reclaim_first_dmap(fc, inode);
+			if (dmap)
+				return dmap;
+		}
+		/*
+		 * There are no mappings which can be reclaimed.
+		 * Wait for one.
+		 */
+		if (!(fc->nr_free_ranges > 0)) {
+			if (wait_event_killable_exclusive(fc->dax_range_waitq,
+					(fc->nr_free_ranges > 0)))
+				return ERR_PTR(-EINTR);
+		}
+	}
+}
+
+static int lookup_and_reclaim_dmap_locked(struct fuse_conn *fc,
+					  struct inode *inode, u64 dmap_start)
+{
+	int ret;
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	struct fuse_dax_mapping *dmap;
+
+	WARN_ON(!inode_is_locked(inode));
+
+	/* Find fuse dax mapping at file offset inode. */
+	dmap = fuse_dax_interval_tree_iter_first(&fi->dmap_tree, dmap_start,
+							dmap_start);
+
+	/* Range already got cleaned up by somebody else */
+	if (!dmap)
+		return 0;
+
+	ret = reclaim_one_dmap_locked(fc, inode, dmap);
+	if (ret < 0)
+		return ret;
+
+	/* Cleanup dmap entry and add back to free list */
+	spin_lock(&fc->lock);
+	dmap_reinit_add_to_free_pool(fc, dmap);
+	spin_unlock(&fc->lock);
+	return ret;
+}
+
+/*
+ * Free a range of memory.
+ * Locking.
+ * 1. Take inode->i_rwsem to prever further read/write.
+ * 2. Take fuse_inode->i_mmap_sem to block dax faults.
+ * 3. Take fuse_inode->i_dmap_sem to protect interval tree. It might not
+ *    be strictly necessary as lock 1 and 2 seem sufficient.
+ */
+static int lookup_and_reclaim_dmap(struct fuse_conn *fc, struct inode *inode,
+			    u64 dmap_start)
+{
+	int ret;
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+	/*
+	 * If process is blocked waiting for memory while holding inode
+	 * lock, we will deadlock. So continue to free next range.
+	 */
+	if (!inode_trylock(inode))
+		return -EAGAIN;
+	down_write(&fi->i_mmap_sem);
+	down_write(&fi->i_dmap_sem);
+	ret = lookup_and_reclaim_dmap_locked(fc, inode, dmap_start);
+	up_write(&fi->i_dmap_sem);
+	up_write(&fi->i_mmap_sem);
+	inode_unlock(inode);
+	return ret;
+}
+
+static int try_to_free_dmap_chunks(struct fuse_conn *fc,
+				   unsigned long nr_to_free)
+{
+	struct fuse_dax_mapping *dmap, *pos, *temp;
+	int ret, nr_freed = 0;
+	u64 dmap_start = 0, window_offset = 0;
+	struct inode *inode = NULL;
+
+	/* Pick first busy range and free it for now*/
+	while(1) {
+		if (nr_freed >= nr_to_free)
+			break;
+
+		dmap = NULL;
+		spin_lock(&fc->lock);
+
+		if (!fc->nr_busy_ranges) {
+			spin_unlock(&fc->lock);
+			return 0;
+		}
+
+		list_for_each_entry_safe(pos, temp, &fc->busy_ranges,
+						busy_list) {
+			inode = igrab(pos->inode);
+			/*
+			 * This inode is going away. That will free
+			 * up all the ranges anyway, continue to
+			 * next range.
+			 */
+			if (!inode)
+				continue;
+			/*
+			 * Take this element off list and add it tail. If
+			 * inode lock can't be obtained, this will help with
+			 * selecting new element
+			 */
+			dmap = pos;
+			list_move_tail(&dmap->busy_list, &fc->busy_ranges);
+			dmap_start = dmap->start;
+			window_offset = dmap->window_offset;
+			break;
+		}
+		spin_unlock(&fc->lock);
+		if (!dmap)
+			return 0;
+
+		ret = lookup_and_reclaim_dmap(fc, inode, dmap_start);
+		iput(inode);
+		if (ret && ret != -EAGAIN) {
+			printk("%s(window_offset=0x%llx) failed. err=%d\n",
+				__func__, window_offset, ret);
+			return ret;
+		}
+
+		/* Could not get inode lock. Try next element */
+		if (ret == -EAGAIN) {
+			cond_resched();
+			continue;
+		}
+		nr_freed++;
+	}
+	return 0;
+}
+
+/* TODO: This probably should go in inode.c */
+void fuse_dax_free_mem_worker(struct work_struct *work)
+{
+	int ret;
+	struct fuse_conn *fc = container_of(work, struct fuse_conn,
+						dax_free_work.work);
+	pr_debug("fuse: Worker to free memory called. nr_free_ranges=%lu"
+		 " nr_busy_ranges=%lu\n", fc->nr_free_ranges,
+		 fc->nr_busy_ranges);
+
+	ret = try_to_free_dmap_chunks(fc, FUSE_DAX_RECLAIM_CHUNK);
+	if (ret) {
+		pr_debug("fuse: try_to_free_dmap_chunks() failed with err=%d\n",
+			 ret);
+	}
+
+	/* If number of free ranges are still below threhold, requeue */
+	kick_dmap_free_worker(fc, 1);
 }
