@@ -273,6 +273,10 @@ static int fuse_setup_one_mapping(struct inode *inode,
 	/* Protected by fi->i_dmap_sem */
 	fuse_dax_interval_tree_insert(dmap, &fi->dmap_tree);
 	fi->nr_dmaps++;
+	spin_lock(&fc->lock);
+	list_add_tail(&dmap->busy_list, &fc->busy_ranges);
+	fc->nr_busy_ranges++;
+	spin_unlock(&fc->lock);
 	return 0;
 }
 
@@ -317,6 +321,10 @@ void fuse_removemapping(struct inode *inode)
 		if (dmap) {
 			fuse_dax_interval_tree_remove(dmap, &fi->dmap_tree);
 			fi->nr_dmaps--;
+			spin_lock(&fc->lock);
+			list_del_init(&dmap->busy_list);
+			fc->nr_busy_ranges--;
+			spin_unlock(&fc->lock);
 		}
 
 		if (!dmap)
