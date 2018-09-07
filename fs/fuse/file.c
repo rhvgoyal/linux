@@ -184,6 +184,7 @@ static void fuse_link_write_file(struct file *file)
 
 static struct fuse_dax_mapping *alloc_dax_mapping(struct fuse_conn *fc)
 {
+	unsigned long free_threshold;
 	struct fuse_dax_mapping *dmap = NULL;
 
 	spin_lock(&fc->lock);
@@ -191,7 +192,7 @@ static struct fuse_dax_mapping *alloc_dax_mapping(struct fuse_conn *fc)
 	/* TODO: Add logic to try to free up memory if wait is allowed */
 	if (fc->nr_free_ranges <= 0) {
 		spin_unlock(&fc->lock);
-		return NULL;
+		goto out_kick;
 	}
 
 	WARN_ON(list_empty(&fc->free_ranges));
@@ -202,6 +203,15 @@ static struct fuse_dax_mapping *alloc_dax_mapping(struct fuse_conn *fc)
 	list_del_init(&dmap->list);
 	fc->nr_free_ranges--;
 	spin_unlock(&fc->lock);
+
+out_kick:
+	/* If number of free ranges are below threshold, start reclaim */
+	free_threshold = max((fc->nr_ranges * FUSE_DAX_RECLAIM_THRESHOLD)/100,
+				(unsigned long)1);
+	if (fc->nr_free_ranges < free_threshold) {
+		pr_debug("fuse: Kicking dax memory reclaim worker. nr_free_ranges=0x%ld nr_total_ranges=%ld\n", fc->nr_free_ranges, fc->nr_ranges);
+		queue_delayed_work(system_long_wq, &fc->dax_free_work, 0);
+	}
 	return dmap;
 }
 

@@ -675,6 +675,7 @@ static int fuse_dax_mem_range_init(struct fuse_conn *fc,
 
 	list_replace_init(&mem_ranges, &fc->free_ranges);
 	fc->nr_free_ranges = allocated_ranges;
+	fc->nr_ranges = allocated_ranges;
 	return 0;
 out_err:
 	/* Free All allocated elements */
