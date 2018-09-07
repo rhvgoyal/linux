@@ -53,6 +53,13 @@
 /* Number of ranges reclaimer will try to free in one invocation */
 #define FUSE_DAX_RECLAIM_CHUNK		(10)
 
+/*
+ * Dax memory reclaim threshold in percetage of total ranges. When free
+ * number of free ranges drops below this threshold, reclaim can trigger
+ * Default is 20%
+ * */
+#define FUSE_DAX_RECLAIM_THRESHOLD	(20)
+
 /** List of active connections */
 extern struct list_head fuse_conn_list;
 
@@ -885,6 +892,8 @@ struct fuse_conn {
 	 */
 	unsigned long nr_free_ranges;
 	struct list_head free_ranges;
+
+	unsigned long nr_ranges;
 };
 
 static inline struct fuse_conn *get_fuse_conn_super(struct super_block *sb)
