@@ -1326,7 +1326,7 @@ static int fuse_permission(struct inode *inode, int mask)
 
 	if (fc->default_permissions) {
 		err = -EACCES;
-		if (!refreshed && !fuse_shared_version_mismatch(inode))
+		if (refreshed || !fuse_shared_version_mismatch(inode))
 			err = generic_permission(inode, mask);
 
 		/* If permission is denied, try to refresh file
