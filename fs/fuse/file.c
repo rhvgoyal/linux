@@ -1692,32 +1692,42 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	return res;
 }
 
+static ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to);
 static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	struct file *file = iocb->ki_filp;
 	struct fuse_file *ff = file->private_data;
+	struct inode *inode = file->f_mapping->host;
 
 	if (is_bad_inode(file_inode(file)))
 		return -EIO;
 
-	if (!(ff->open_flags & FOPEN_DIRECT_IO))
-		return fuse_cache_read_iter(iocb, to);
-	else
+	if (ff->open_flags & FOPEN_DIRECT_IO)
 		return fuse_direct_read_iter(iocb, to);
+
+	if (IS_DAX(inode))
+		return fuse_dax_read_iter(iocb, to);
+
+	return fuse_cache_read_iter(iocb, to);
 }
 
+static ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from);
 static ssize_t fuse_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
 	struct fuse_file *ff = file->private_data;
+	struct inode *inode = file->f_mapping->host;
 
 	if (is_bad_inode(file_inode(file)))
 		return -EIO;
 
-	if (!(ff->open_flags & FOPEN_DIRECT_IO))
-		return fuse_cache_write_iter(iocb, from);
-	else
+	if (ff->open_flags & FOPEN_DIRECT_IO)
 		return fuse_direct_write_iter(iocb, from);
+
+	if (IS_DAX(inode))
+		return fuse_dax_write_iter(iocb, from);
+
+	return fuse_cache_write_iter(iocb, from);
 }
 
 static void fuse_fill_iomap_hole(struct iomap *iomap, loff_t length)
@@ -2591,9 +2601,14 @@ static const struct vm_operations_struct fuse_file_vm_ops = {
 	.page_mkwrite	= fuse_page_mkwrite,
 };
 
+static int fuse_dax_mmap(struct file *file, struct vm_area_struct *vma);
 static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct fuse_file *ff = file->private_data;
+
+	/* DAX mmap is superior to direct_io mmap */
+	if (IS_DAX(file_inode(file)))
+		return fuse_dax_mmap(file, vma);
 
 	if (ff->open_flags & FOPEN_DIRECT_IO) {
 		/* Can't provide the coherency needed for MAP_SHARED */
@@ -2613,6 +2628,18 @@ static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+static ssize_t fuse_file_splice_read(struct file *in, loff_t *ppos,
+				     struct pipe_inode_info *pipe, size_t len,
+				     unsigned int flags)
+{
+	struct fuse_file *ff = in->private_data;
+
+	if (ff->open_flags & FOPEN_DIRECT_IO)
+		return default_file_splice_read(in, ppos, pipe, len, flags);
+	else
+		return generic_file_splice_read(in, ppos, pipe, len, flags);
+
+}
 static int __fuse_dax_fault(struct vm_fault *vmf, enum page_entry_size pe_size,
 			    bool write)
 {
@@ -3709,33 +3736,15 @@ static const struct file_operations fuse_file_operations = {
 	.release	= fuse_release,
 	.fsync		= fuse_fsync,
 	.lock		= fuse_file_lock,
+	.get_unmapped_area = thp_get_unmapped_area,
 	.flock		= fuse_file_flock,
-	.splice_read	= generic_file_splice_read,
+	.splice_read	= fuse_file_splice_read,
 	.splice_write	= iter_file_splice_write,
 	.unlocked_ioctl	= fuse_file_ioctl,
 	.compat_ioctl	= fuse_file_compat_ioctl,
 	.poll		= fuse_file_poll,
 	.fallocate	= fuse_file_fallocate,
 	.copy_file_range = fuse_copy_file_range,
-};
-
-static const struct file_operations fuse_dax_file_operations = {
-	.llseek		= fuse_file_llseek,
-	.read_iter	= fuse_dax_read_iter,
-	.write_iter	= fuse_dax_write_iter,
-	.mmap		= fuse_dax_mmap,
-	.open		= fuse_open,
-	.flush		= fuse_flush,
-	.release	= fuse_release,
-	.fsync		= fuse_fsync,
-	.lock		= fuse_file_lock,
-	.get_unmapped_area = thp_get_unmapped_area,
-	.flock		= fuse_file_flock,
-	.unlocked_ioctl	= fuse_file_ioctl,
-	.compat_ioctl	= fuse_file_compat_ioctl,
-	.poll		= fuse_file_poll,
-	.fallocate	= fuse_file_fallocate,
-	/* no splice_read */
 };
 
 static const struct address_space_operations fuse_file_aops  = {
@@ -3775,7 +3784,6 @@ void fuse_init_file_inode(struct inode *inode)
 
 	if (fc->dax_dev) {
 		inode->i_flags |= S_DAX;
-		inode->i_fop = &fuse_dax_file_operations;
 		inode->i_data.a_ops = &fuse_dax_file_aops;
 	}
 }
