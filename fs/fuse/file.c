@@ -22,8 +22,6 @@
 #include <linux/iomap.h>
 #include <linux/interval_tree_generic.h>
 
-static const struct file_operations fuse_direct_io_file_operations;
-
 INTERVAL_TREE_DEFINE(struct fuse_dax_mapping,
                      rb, __u64, __subtree_last,
                      START, LAST, static inline, fuse_dax_interval_tree);
@@ -398,8 +396,6 @@ void fuse_finish_open(struct inode *inode, struct file *file)
 	struct fuse_file *ff = file->private_data;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 
-	if (ff->open_flags & FOPEN_DIRECT_IO)
-		file->f_op = &fuse_direct_io_file_operations;
 	if (!(ff->open_flags & FOPEN_KEEP_CACHE))
 		invalidate_inode_pages2(inode->i_mapping);
 	if (ff->open_flags & FOPEN_NONSEEKABLE)
@@ -1140,10 +1136,22 @@ out:
 	return err;
 }
 
+
+static ssize_t fuse_direct_read_iter(struct kiocb *iocb, struct iov_iter *to);
+static ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to);
+
 static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
-	struct inode *inode = iocb->ki_filp->f_mapping->host;
+	struct file *file = iocb->ki_filp;
+	struct fuse_file *ff = file->private_data;
+	struct inode *inode = file->f_mapping->host;
 	struct fuse_conn *fc = get_fuse_conn(inode);
+
+	if (ff->open_flags & FOPEN_DIRECT_IO)
+		return fuse_direct_read_iter(iocb, to);
+
+	if (IS_DAX(inode))
+		return fuse_dax_read_iter(iocb, to);
 
 	/*
 	 * In auto invalidate mode, always update attributes on read.
@@ -1394,15 +1402,25 @@ static ssize_t fuse_perform_write(struct kiocb *iocb,
 	return res > 0 ? res : err;
 }
 
+static ssize_t fuse_direct_write_iter(struct kiocb *iocb,
+				      struct iov_iter *from);
+static ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from);
+
 static ssize_t fuse_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
+	struct fuse_file *ff = file->private_data;
 	struct address_space *mapping = file->f_mapping;
 	ssize_t written = 0;
 	ssize_t written_buffered = 0;
 	struct inode *inode = mapping->host;
 	ssize_t err;
 	loff_t endbyte = 0;
+
+	if (ff->open_flags & FOPEN_DIRECT_IO)
+		return fuse_direct_write_iter(iocb, from);
+	if (IS_DAX(inode))
+		return fuse_dax_write_iter(iocb, from);
 
 	if (get_fuse_conn(inode)->writeback_cache) {
 		/* Update size (EOF optimization) and mode (SUID clearing) */
@@ -2536,8 +2554,20 @@ static const struct vm_operations_struct fuse_file_vm_ops = {
 	.page_mkwrite	= fuse_page_mkwrite,
 };
 
+static int fuse_direct_mmap(struct file *file, struct vm_area_struct *vma);
+static int fuse_dax_mmap(struct file *file, struct vm_area_struct *vma);
+
 static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	struct fuse_file *ff = file->private_data;
+
+	/* DAX mmap is superior to direct_io mmap */
+	if (IS_DAX(file_inode(file)))
+		return fuse_dax_mmap(file, vma);
+
+	if (ff->open_flags & FOPEN_DIRECT_IO)
+		return fuse_direct_mmap(file, vma);
+
 	if ((vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_MAYWRITE))
 		fuse_link_write_file(file);
 
@@ -2557,6 +2587,18 @@ static int fuse_direct_mmap(struct file *file, struct vm_area_struct *vma)
 	return generic_file_mmap(file, vma);
 }
 
+static ssize_t fuse_file_splice_read(struct file *in, loff_t *ppos,
+				     struct pipe_inode_info *pipe, size_t len,
+				     unsigned int flags)
+{
+	struct fuse_file *ff = in->private_data;
+
+	if (ff->open_flags & FOPEN_DIRECT_IO)
+		return default_file_splice_read(in, ppos, pipe, len, flags);
+	else
+		return generic_file_splice_read(in, ppos, pipe, len, flags);
+
+}
 static int __fuse_dax_fault(struct vm_fault *vmf, enum page_entry_size pe_size,
 			    bool write)
 {
@@ -3648,43 +3690,7 @@ static const struct file_operations fuse_file_operations = {
 	.read_iter	= fuse_file_read_iter,
 	.write_iter	= fuse_file_write_iter,
 	.mmap		= fuse_file_mmap,
-	.open		= fuse_open,
-	.flush		= fuse_flush,
-	.release	= fuse_release,
-	.fsync		= fuse_fsync,
-	.lock		= fuse_file_lock,
-	.flock		= fuse_file_flock,
-	.splice_read	= generic_file_splice_read,
-	.unlocked_ioctl	= fuse_file_ioctl,
-	.compat_ioctl	= fuse_file_compat_ioctl,
-	.poll		= fuse_file_poll,
-	.fallocate	= fuse_file_fallocate,
-	.copy_file_range = fuse_copy_file_range,
-};
-
-static const struct file_operations fuse_direct_io_file_operations = {
-	.llseek		= fuse_file_llseek,
-	.read_iter	= fuse_direct_read_iter,
-	.write_iter	= fuse_direct_write_iter,
-	.mmap		= fuse_direct_mmap,
-	.open		= fuse_open,
-	.flush		= fuse_flush,
-	.release	= fuse_release,
-	.fsync		= fuse_fsync,
-	.lock		= fuse_file_lock,
-	.flock		= fuse_file_flock,
-	.unlocked_ioctl	= fuse_file_ioctl,
-	.compat_ioctl	= fuse_file_compat_ioctl,
-	.poll		= fuse_file_poll,
-	.fallocate	= fuse_file_fallocate,
-	/* no splice_read */
-};
-
-static const struct file_operations fuse_dax_file_operations = {
-	.llseek		= fuse_file_llseek,
-	.read_iter	= fuse_dax_read_iter,
-	.write_iter	= fuse_dax_write_iter,
-	.mmap		= fuse_dax_mmap,
+	.splice_read    = fuse_file_splice_read,
 	.open		= fuse_open,
 	.flush		= fuse_flush,
 	.release	= fuse_release,
@@ -3696,7 +3702,7 @@ static const struct file_operations fuse_dax_file_operations = {
 	.compat_ioctl	= fuse_file_compat_ioctl,
 	.poll		= fuse_file_poll,
 	.fallocate	= fuse_file_fallocate,
-	/* no splice_read */
+	.copy_file_range = fuse_copy_file_range,
 };
 
 static const struct address_space_operations fuse_file_aops  = {
@@ -3736,7 +3742,6 @@ void fuse_init_file_inode(struct inode *inode)
 
 	if (fc->dax_dev) {
 		inode->i_flags |= S_DAX;
-		inode->i_fop = &fuse_dax_file_operations;
 		inode->i_data.a_ops = &fuse_dax_file_aops;
 	}
 }
