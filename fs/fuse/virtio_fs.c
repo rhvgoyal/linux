@@ -27,6 +27,8 @@ enum {
 struct virtio_fs_vq {
 	struct virtqueue *vq;     /* protected by fpq->lock */
 	struct work_struct done_work;
+	struct list_head queued_reqs;
+	struct delayed_work dispatch_work;
 	struct fuse_dev *fud;
 	char name[24];
 } ____cacheline_aligned_in_smp;
@@ -56,6 +58,13 @@ struct virtio_fs {
 	void *window_kaddr;
 	phys_addr_t window_phys_addr;
 	size_t window_len;
+};
+
+struct virtio_fs_forget {
+	struct fuse_in_header ih;
+	struct fuse_forget_in arg;
+	/* This request can be temporarily queued on virt queue */
+	struct list_head list;
 };
 
 static inline struct virtio_fs_vq *vq_to_fsvq(struct virtqueue *vq)
@@ -126,6 +135,7 @@ static void virtio_fs_free_devs(struct virtio_fs *fs)
 			continue;
 
 		flush_work(&fsvq->done_work);
+		flush_delayed_work(&fsvq->dispatch_work);
 
 		fuse_dev_free(fsvq->fud); /* TODO need to quiesce/end_requests/decrement dev_count */
 		fsvq->fud = NULL;
@@ -187,6 +197,65 @@ static void virtio_fs_hiprio_done_work(struct work_struct *work)
 			kfree(req);
 	} while (!virtqueue_enable_cb(vq) && likely(!virtqueue_is_broken(vq)));
 	spin_unlock(&fpq->lock);
+}
+
+static void virtio_fs_dummy_dispatch_work(struct work_struct *work)
+{
+	return;
+}
+
+static void virtio_fs_hiprio_dispatch_work(struct work_struct *work)
+{
+	struct virtio_fs_forget *forget;
+	struct virtio_fs_vq *fsvq = container_of(work, struct virtio_fs_vq,
+						 dispatch_work.work);
+	struct fuse_pqueue *fpq = &fsvq->fud->pq;
+	struct virtqueue *vq = fsvq->vq;
+	struct scatterlist sg;
+	struct scatterlist *sgs[] = {&sg};
+	bool notify;
+	int ret;
+
+	pr_debug("worker virtio_fs_hiprio_dispatch_work() called.\n");
+	while(1) {
+		spin_lock(&fpq->lock);
+		forget = list_first_entry_or_null(&fsvq->queued_reqs,
+					struct virtio_fs_forget, list);
+		if (!forget) {
+			spin_unlock(&fpq->lock);
+			return;
+		}
+
+		list_del(&forget->list);
+		sg_init_one(&sg, forget, sizeof(*forget));
+
+		/* Enqueue the request */
+		dev_dbg(&vq->vdev->dev, "%s\n", __func__);
+		ret = virtqueue_add_sgs(vq, sgs, 1, 0, forget, GFP_ATOMIC);
+		if (ret < 0) {
+			if (ret == -ENOMEM || ret == -ENOSPC) {
+				pr_debug("virtio-fs: Could not queue FORGET:"
+					 " err=%d. Will try later\n", ret);
+				list_add_tail(&forget->list,
+						&fsvq->queued_reqs);
+				schedule_delayed_work(&fsvq->dispatch_work,
+						msecs_to_jiffies(1));
+			} else {
+				pr_debug("virtio-fs: Could not queue FORGET:"
+					 " err=%d. Dropping it.\n", ret);
+				kfree(forget);
+			}
+			spin_unlock(&fpq->lock);
+			return;
+		}
+
+		notify = virtqueue_kick_prepare(vq);
+		spin_unlock(&fpq->lock);
+
+		if (notify)
+			virtqueue_notify(vq);
+		pr_debug("worker virtio_fs_hiprio_dispatch_work() dispatched one forget request.\n");
+	}
 }
 
 /* Allocate and copy args into req->argbuf */
@@ -344,16 +413,25 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 	INIT_WORK(&fs->vqs[VQ_NOTIFY].done_work,
 			virtio_fs_notifications_done_work);
 	names[VQ_NOTIFY] = fs->vqs[VQ_NOTIFY].name;
+	INIT_LIST_HEAD(&fs->vqs[VQ_NOTIFY].queued_reqs);
+	INIT_DELAYED_WORK(&fs->vqs[VQ_NOTIFY].dispatch_work,
+			virtio_fs_dummy_dispatch_work);
 
 	callbacks[VQ_HIPRIO] = virtio_fs_vq_done;
 	snprintf(fs->vqs[VQ_HIPRIO].name, sizeof(fs->vqs[VQ_HIPRIO].name),
 			"hiprio");
 	names[VQ_HIPRIO] = fs->vqs[VQ_HIPRIO].name;
 	INIT_WORK(&fs->vqs[VQ_HIPRIO].done_work, virtio_fs_hiprio_done_work);
+	INIT_LIST_HEAD(&fs->vqs[VQ_HIPRIO].queued_reqs);
+	INIT_DELAYED_WORK(&fs->vqs[VQ_HIPRIO].dispatch_work,
+			virtio_fs_hiprio_dispatch_work);
 
 	/* Initialize the requests virtqueues */
 	for (i = VQ_REQUEST; i < fs->nvqs; i++) {
 		INIT_WORK(&fs->vqs[i].done_work, virtio_fs_requests_done_work);
+		INIT_DELAYED_WORK(&fs->vqs[i].dispatch_work,
+					virtio_fs_dummy_dispatch_work);
+		INIT_LIST_HEAD(&fs->vqs[i].queued_reqs);
 		snprintf(fs->vqs[i].name, sizeof(fs->vqs[i].name),
 			 "requests.%u", i - VQ_REQUEST);
 		callbacks[i] = virtio_fs_vq_done;
@@ -621,11 +699,6 @@ static struct virtio_driver virtio_fs_driver = {
 #endif
 };
 
-struct virtio_fs_forget {
-	struct fuse_in_header ih;
-	struct fuse_forget_in arg;
-};
-
 static void virtio_fs_wake_forget_and_unlock(struct fuse_iqueue *fiq)
 __releases(fiq->waitq.lock)
 {
@@ -636,6 +709,7 @@ __releases(fiq->waitq.lock)
 	struct scatterlist *sgs[] = {&sg};
 	struct virtio_fs *fs;
 	struct virtqueue *vq;
+	struct virtio_fs_vq *fsvq;
 	bool notify;
 	u64 unique;
 	int ret;
@@ -649,7 +723,7 @@ __releases(fiq->waitq.lock)
 	unique = fuse_get_unique(fiq);
 
 	fs = fiq->priv;
-
+	fsvq = &fs->vqs[VQ_HIPRIO];
 	spin_unlock(&fiq->waitq.lock);
 
 	/* Allocate a buffer for the request */
@@ -672,15 +746,24 @@ __releases(fiq->waitq.lock)
 	sg_init_one(&sg, forget, sizeof(*forget));
 
 	/* Enqueue the request */
-	vq = fs->vqs[1].vq;
+	vq = fsvq->vq;
 	dev_dbg(&vq->vdev->dev, "%s\n", __func__);
 	fpq = vq_to_fpq(vq);
 	spin_lock(&fpq->lock);
 
 	ret = virtqueue_add_sgs(vq, sgs, 1, 0, forget, GFP_ATOMIC);
 	if (ret < 0) {
-		pr_err("virtio-fs: dropped FORGET: queue full\n");
-		/* TODO handle full virtqueue */
+		if (ret == -ENOMEM || ret == -ENOSPC) {
+			pr_debug("virtio-fs: Could not queue FORGET: err=%d."
+				 " Will try later.\n", ret);
+			list_add_tail(&forget->list, &fsvq->queued_reqs);
+			schedule_delayed_work(&fsvq->dispatch_work,
+					msecs_to_jiffies(1));
+		} else {
+			pr_debug("virtio-fs: Could not queue FORGET: err=%d."
+				 " Dropping it.\n", ret);
+			kfree(forget);
+		}
 		spin_unlock(&fpq->lock);
 		goto out;
 	}
@@ -691,7 +774,6 @@ __releases(fiq->waitq.lock)
 
 	if (notify)
 		virtqueue_notify(vq);
-
 out:
 	kfree(link);
 }
