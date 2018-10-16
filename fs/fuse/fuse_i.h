@@ -886,6 +886,9 @@ struct fuse_conn {
 	/* Worker to free up memory ranges */
 	struct delayed_work dax_free_work;
 
+	/* Wait queue for a dax range to become free */
+	wait_queue_head_t dax_range_waitq;
+
 	/*
 	 * DAX Window Free Ranges. TODO: This might not be best place to store
 	 * this free list

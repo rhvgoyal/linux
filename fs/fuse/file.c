@@ -238,6 +238,8 @@ static void __free_dax_mapping(struct fuse_conn *fc,
 {
 	list_add_tail(&dmap->list, &fc->free_ranges);
 	fc->nr_free_ranges++;
+	/* TODO: Wake up only when needed */
+	wake_up(&fc->dax_range_waitq);
 }
 
 static void free_dax_mapping(struct fuse_conn *fc,
@@ -1789,12 +1791,18 @@ static int fuse_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 			goto iomap_hole;
 
 		/* Can't do reclaim in fault path yet due to lock ordering */
-		if (flags & IOMAP_FAULT)
+		if (flags & IOMAP_FAULT) {
 			alloc_dmap = alloc_dax_mapping(fc);
-		else
+			if (!alloc_dmap)
+				return -ENOSPC;
+		} else {
 			alloc_dmap = alloc_dax_mapping_reclaim(fc, inode);
+			if (IS_ERR(alloc_dmap))
+				return PTR_ERR(alloc_dmap);
+		}
 
-		if (!alloc_dmap)
+		/* If we are here, we should have memory allocated */
+		if (WARN_ON(!alloc_dmap))
 			return -EBUSY;
 
 		/*
@@ -2615,13 +2623,23 @@ static ssize_t fuse_file_splice_read(struct file *in, loff_t *ppos,
 static int __fuse_dax_fault(struct vm_fault *vmf, enum page_entry_size pe_size,
 			    bool write)
 {
-	int ret;
+	int ret, error = 0;
 	struct inode *inode = file_inode(vmf->vma->vm_file);
 	struct super_block *sb = inode->i_sb;
 	pfn_t pfn;
+	struct fuse_conn *fc = get_fuse_conn(inode);
+	bool retry = false;
 
 	if (write)
 		sb_start_pagefault(sb);
+
+retry:
+	if (retry && !(fc->nr_free_ranges > 0)) {
+		ret = -EINTR;
+		if (wait_event_killable_exclusive(fc->dax_range_waitq,
+					(fc->nr_free_ranges > 0)))
+			goto out;
+	}
 
 	/*
 	 * We need to serialize against not only truncate but also against
@@ -2630,13 +2648,20 @@ static int __fuse_dax_fault(struct vm_fault *vmf, enum page_entry_size pe_size,
 	 * to populate page cache or access memory we are trying to free.
 	 */
 	down_read(&get_fuse_inode(inode)->i_mmap_sem);
-	ret = dax_iomap_fault(vmf, pe_size, &pfn, NULL, &fuse_iomap_ops);
+	ret = dax_iomap_fault(vmf, pe_size, &pfn, &error, &fuse_iomap_ops);
+	if ((ret & VM_FAULT_ERROR) && error == -ENOSPC) {
+		error = 0;
+		retry = true;
+		up_read(&get_fuse_inode(inode)->i_mmap_sem);
+		goto retry;
+	}
 
 	if (ret & VM_FAULT_NEEDDSYNC)
 		ret = dax_finish_sync_fault(vmf, pe_size, pfn);
 
 	up_read(&get_fuse_inode(inode)->i_mmap_sem);
 
+out:
 	if (write)
 		sb_end_pagefault(sb);
 
@@ -3852,16 +3877,23 @@ static struct fuse_dax_mapping *alloc_dax_mapping_reclaim(struct fuse_conn *fc,
 	struct fuse_dax_mapping *dmap;
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
-	dmap = alloc_dax_mapping(fc);
-	if (dmap)
-		return dmap;
+	while(1) {
+		dmap = alloc_dax_mapping(fc);
+		if (dmap)
+			return dmap;
 
-	/* There are no mappings which can be reclaimed */
-	if (!fi->nr_dmaps)
-		return NULL;
-
-	/* Try reclaim a fuse dax memory range */
-	return fuse_dax_reclaim_first_mapping(fc, inode);
+		if (fi->nr_dmaps)
+			return fuse_dax_reclaim_first_mapping(fc, inode);
+		/*
+		 * There are no mappings which can be reclaimed.
+		 * Wait for one.
+		 */
+		if (!(fc->nr_free_ranges > 0)) {
+			if (wait_event_killable_exclusive(fc->dax_range_waitq,
+					(fc->nr_free_ranges > 0)))
+				return ERR_PTR(-EINTR);
+		}
+	}
 }
 
 int fuse_dax_free_one_mapping_locked(struct fuse_conn *fc, struct inode *inode,
