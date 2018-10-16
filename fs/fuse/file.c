@@ -3913,7 +3913,12 @@ int fuse_dax_free_one_mapping(struct fuse_conn *fc, struct inode *inode,
 	int ret;
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
-	inode_lock(inode);
+	/*
+	 * If process is blocked waiting for memory while holding inode
+	 * lock, we will deadlock. So continue to free next range.
+	 */
+	if (!inode_trylock(inode))
+		return -EAGAIN;
 	down_write(&fi->i_mmap_sem);
 	down_write(&fi->i_dmap_sem);
 	ret = fuse_dax_free_one_mapping_locked(fc, inode, dmap_start);
@@ -3925,19 +3930,22 @@ int fuse_dax_free_one_mapping(struct fuse_conn *fc, struct inode *inode,
 
 int fuse_dax_free_memory(struct fuse_conn *fc, unsigned long nr_to_free)
 {
-	struct fuse_dax_mapping *dmap, *pos;
-	int ret, i;
+	struct fuse_dax_mapping *dmap, *pos, *temp;
+	int ret, nr_freed = 0;
 	u64 dmap_start = 0, window_offset = 0;
 	struct inode *inode = NULL;
 
 	/* Pick first busy range and free it for now*/
-	for (i = 0; i < nr_to_free; i++) {
+	while(1) {
+		if (nr_freed >= nr_to_free)
+			break;
+
 		dmap = NULL;
 		spin_lock(&fc->lock);
 
-		list_for_each_entry(pos, &fc->busy_ranges, busy_list) {
-			dmap = pos;
-			inode = igrab(dmap->inode);
+		list_for_each_entry_safe(pos, temp, &fc->busy_ranges,
+						busy_list) {
+			inode = igrab(pos->inode);
 			/*
 			 * This inode is going away. That will free
 			 * up all the ranges anyway, continue to
@@ -3945,6 +3953,13 @@ int fuse_dax_free_memory(struct fuse_conn *fc, unsigned long nr_to_free)
 			 */
 			if (!inode)
 				continue;
+			/*
+			 * Take this element off list and add it tail. If
+			 * inode lock can't be obtained, this will help with
+			 * selecting new element
+			 */
+			dmap = pos;
+			list_move_tail(&dmap->busy_list, &fc->busy_ranges);
 			dmap_start = dmap->start;
 			window_offset = dmap->window_offset;
 			break;
@@ -3955,11 +3970,16 @@ int fuse_dax_free_memory(struct fuse_conn *fc, unsigned long nr_to_free)
 
 		ret = fuse_dax_free_one_mapping(fc, inode, dmap_start);
 		iput(inode);
-		if (ret) {
+		if (ret && ret != -EAGAIN) {
 			printk("%s(window_offset=0x%llx) failed. err=%d\n",
 				__func__, window_offset, ret);
 			return ret;
 		}
+
+		/* Could not get inode lock. Try next element */
+		if (ret == -EAGAIN)
+			continue;
+		nr_freed++;
 	}
 	return 0;
 }
