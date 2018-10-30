@@ -468,6 +468,41 @@ static int ovl_parse_redirect_mode(struct ovl_config *config, const char *mode)
 	return 0;
 }
 
+static int ovl_process_metacopy_dependency(struct ovl_config *config)
+{
+	if (!config->metacopy)
+		return 0;
+
+	if (config->upperdir && !config->redirect_dir) {
+		/* metacopy feature with upper requires redirect_dir=on */
+		if (!config->metacopy_enforce) {
+			pr_warn("overlayfs: metadata only copy up requires"
+				" \"redirect_dir=on\", falling back to"
+				" metacopy=off\n");
+			config->metacopy = false;
+			return 0;
+		}
+		pr_err("overlayfs: metadata only copy up requires"
+			" \"redirect_dir=on\".\n");
+		return -EINVAL;
+	} else if (!config->upperdir && !config->redirect_follow) {
+		if (!config->metacopy_enforce) {
+			pr_warn("overlayfs: metadata only copy up requires"
+				" either \"redirect_dir=follow\" or"
+				" \"redirect_dir=on\" on non-upper mount,"
+				" falling back to metacopy=off\n");
+			config->metacopy = false;
+			return 0;
+		}
+		pr_err("overlayfs: metadata only copy up requires either"
+			" \"redirect_dir=follow\" or \"redirect_dir=on\" on"
+			" non-upper mount.\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int ovl_parse_opt(char *opt, struct ovl_config *config)
 {
 	char *p;
@@ -548,6 +583,7 @@ static int ovl_parse_opt(char *opt, struct ovl_config *config)
 
 		case OPT_METACOPY_ON:
 			config->metacopy = true;
+			config->metacopy_enforce = true;
 			break;
 
 		case OPT_METACOPY_OFF:
@@ -572,13 +608,10 @@ static int ovl_parse_opt(char *opt, struct ovl_config *config)
 	if (err)
 		return err;
 
-	/* metacopy feature with upper requires redirect_dir=on */
-	if (config->upperdir && config->metacopy && !config->redirect_dir) {
-		pr_warn("overlayfs: metadata only copy up requires \"redirect_dir=on\", falling back to metacopy=off.\n");
-		config->metacopy = false;
-	} else if (config->metacopy && !config->redirect_follow) {
-		pr_warn("overlayfs: metadata only copy up requires \"redirect_dir=follow\" on non-upper mount, falling back to metacopy=off.\n");
-		config->metacopy = false;
+	if (config->metacopy) {
+		err = ovl_process_metacopy_dependency(config);
+		if (err)
+			return err;
 	}
 
 	return 0;
@@ -1055,6 +1088,11 @@ static int ovl_make_workdir(struct ovl_fs *ofs, struct path *workpath)
 	if (err) {
 		ofs->noxattr = true;
 		ofs->config.index = false;
+		if (ofs->config.metacopy && ofs->config.metacopy_enforce) {
+			pr_err("overlayfs: can not support metacopy=on as upper fs does not support xattr.\n");
+			err = -EINVAL;
+			goto out;
+		}
 		ofs->config.metacopy = false;
 		pr_warn("overlayfs: upper fs does not support xattr, falling back to index=off and metacopy=off.\n");
 		err = 0;
