@@ -468,12 +468,29 @@ static int ovl_parse_redirect_mode(struct ovl_config *config, const char *mode)
 	return 0;
 }
 
+static bool ovl_enable_redirect(struct ovl_config *config, bool follow) {
+	if (config->redirect_enforce)
+		return false;
+
+	config->redirect_follow = true;
+	if (!follow) {
+		config->redirect_dir = true;
+		pr_info("overlayfs: Enabling \"redirect_dir=on\".\n");
+	} else {
+		pr_info("overlayfs: Enabling \"redirect_dir=follow\".\n");
+	}
+	return true;
+}
+
 static int ovl_process_metacopy_dependency(struct ovl_config *config)
 {
 	if (!config->metacopy)
 		return 0;
 
 	if (config->upperdir && !config->redirect_dir) {
+		if (ovl_enable_redirect(config, false))
+			return 0;
+
 		/* metacopy feature with upper requires redirect_dir=on */
 		if (!config->metacopy_enforce) {
 			pr_warn("overlayfs: metadata only copy up requires"
@@ -486,6 +503,9 @@ static int ovl_process_metacopy_dependency(struct ovl_config *config)
 			" \"redirect_dir=on\".\n");
 		return -EINVAL;
 	} else if (!config->upperdir && !config->redirect_follow) {
+		if (ovl_enable_redirect(config, true))
+			return 0;
+
 		if (!config->metacopy_enforce) {
 			pr_warn("overlayfs: metadata only copy up requires"
 				" either \"redirect_dir=follow\" or"
@@ -551,6 +571,7 @@ static int ovl_parse_opt(char *opt, struct ovl_config *config)
 			config->redirect_mode = match_strdup(&args[0]);
 			if (!config->redirect_mode)
 				return -ENOMEM;
+			config->redirect_enforce = true;
 			break;
 
 		case OPT_INDEX_ON:
