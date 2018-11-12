@@ -1698,13 +1698,25 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	/* Don't allow parallel writes to the same file */
 	inode_lock(inode);
 	res = generic_write_checks(iocb, from);
-	if (res > 0)
-		res = fuse_direct_io(&io, from, &iocb->ki_pos, FUSE_DIO_WRITE);
-	fuse_invalidate_attr(inode);
-	if (res > 0)
-		fuse_write_update_size(inode, iocb->ki_pos);
-	inode_unlock(inode);
+	if (res < 0)
+		goto out_invalidate;
 
+	res = file_remove_privs(iocb->ki_filp);
+	if (res)
+		goto out_invalidate;
+
+	res = fuse_direct_io(&io, from, &iocb->ki_pos, FUSE_DIO_WRITE);
+	if (res < 0)
+		goto out_invalidate;
+
+	fuse_invalidate_attr(inode);
+	fuse_write_update_size(inode, iocb->ki_pos);
+	inode_unlock(inode);
+	return res;
+
+out_invalidate:
+	fuse_invalidate_attr(inode);
+	inode_unlock(inode);
 	return res;
 }
 
