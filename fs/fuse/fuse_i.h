@@ -97,10 +97,21 @@ struct fuse_forget_link {
 	struct fuse_forget_link *next;
 };
 
+#define START(node) ((node)->start)
+#define LAST(node) ((node)->end)
+
 /** Translation information for file offsets to DAX window offsets */
 struct fuse_dax_mapping {
 	/* Will connect in fc->free_ranges to keep track of free memory */
 	struct list_head list;
+
+	/* For interval tree in file/inode */
+	struct rb_node rb;
+	/** Start Position in file */
+	__u64 start;
+	/** End Position in file */
+	__u64 end;
+	__u64 __subtree_last;
 
        /** Position in DAX window */
        u64 window_offset;
@@ -191,6 +202,10 @@ struct fuse_inode {
 
 	/** Lock for serializing lookup and readdir for back compatibility*/
 	struct mutex mutex;
+
+	/** Sorted rb tree of struct fuse_dax_mapping elements */
+	struct rb_root_cached dmap_tree;
+	unsigned long nr_dmaps;
 };
 
 /** FUSE inode state bits */
