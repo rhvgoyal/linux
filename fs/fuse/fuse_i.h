@@ -81,6 +81,15 @@ struct fuse_forget_link {
 	struct fuse_forget_link *next;
 };
 
+/** Translation information for file offsets to DAX window offsets */
+struct fuse_dax_mapping {
+       /** Position in DAX window */
+       u64 window_offset;
+
+       /** Length of mapping, in bytes */
+       loff_t length;
+};
+
 /** FUSE inode */
 struct fuse_inode {
 	/** Inode data */
