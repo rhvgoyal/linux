@@ -70,16 +70,29 @@ struct fuse_forget_link {
 	struct fuse_forget_link *next;
 };
 
+#define START(node) ((node)->start)
+#define LAST(node) ((node)->end)
+
 /** Translation information for file offsets to DAX window offsets */
 struct fuse_dax_mapping {
 	/* Will connect in fc->free_ranges to keep track of free memory */
 	struct list_head list;
 
+	/* For interval tree in file/inode */
+	struct rb_node rb;
+	/** Start Position in file */
+	__u64 start;
+	/** End Position in file */
+	__u64 end;
+	__u64 __subtree_last;
 	/** Position in DAX window */
 	u64 window_offset;
 
 	/** Length of mapping, in bytes */
 	loff_t length;
+
+	/* Is this mapping read-only or read-write */
+	bool writable;
 };
 
 /** FUSE inode */
@@ -167,6 +180,15 @@ struct fuse_inode {
 
 	/** Lock to protect write related fields */
 	spinlock_t lock;
+
+	/*
+	 * Semaphore to protect modifications to dmap_tree
+	 */
+	struct rw_semaphore i_dmap_sem;
+
+	/** Sorted rb tree of struct fuse_dax_mapping elements */
+	struct rb_root_cached dmap_tree;
+	unsigned long nr_dmaps;
 };
 
 /** FUSE inode state bits */
@@ -1126,5 +1148,6 @@ unsigned int fuse_len_args(unsigned int numargs, struct fuse_arg *args);
  */
 u64 fuse_get_unique(struct fuse_iqueue *fiq);
 void fuse_free_conn(struct fuse_conn *fc);
+void fuse_cleanup_inode_mappings(struct inode *inode);
 
 #endif /* _FS_FUSE_I_H */
