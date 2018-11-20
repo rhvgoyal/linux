@@ -1055,6 +1055,7 @@ static int virtio_fs_fill_super(struct super_block *sb, void *data,
 	d.fiq_ops = &virtio_fs_fiq_ops;
 	d.fiq_priv = fs;
 	d.fudptr = (void **)&fs->vqs[VQ_REQUEST].fud;
+	d.destroy = true; /* Send destroy request on unmount */
 	err = fuse_fill_super_common(sb, &d);
 	if (err < 0)
 		goto err_free_init_req;
@@ -1085,6 +1086,16 @@ err:
 	return err;
 }
 
+static void virtio_kill_sb(struct super_block *sb)
+{
+	struct fuse_conn *fc = get_fuse_conn_super(sb);
+	fuse_kill_sb_anon(sb);
+	if (fc) {
+		struct virtio_fs *vfs = fc->iq.priv;
+		virtio_fs_free_devs(vfs);
+	}
+}
+
 static struct dentry *virtio_fs_mount(struct file_system_type *fs_type,
 				      int flags, const char *dev_name,
 				      void *raw_data)
@@ -1096,7 +1107,7 @@ static struct file_system_type virtio_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= KBUILD_MODNAME,
 	.mount		= virtio_fs_mount,
-	.kill_sb	= fuse_kill_sb_anon,
+	.kill_sb	= virtio_kill_sb,
 };
 
 static int __init virtio_fs_init(void)
