@@ -1259,7 +1259,7 @@ int fuse_fill_super_common(struct super_block *sb,
 	/* Root dentry doesn't have .d_revalidate */
 	sb->s_d_op = &fuse_dentry_operations;
 
-	if (is_bdev) {
+	if (mount_data->destroy) {
 		fc->destroy_req = fuse_request_alloc(0);
 		if (!fc->destroy_req)
 			goto err_put_root;
@@ -1332,6 +1332,7 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	d.fiq_ops = &fuse_dev_fiq_ops;
 	d.fiq_priv = NULL;
 	d.fudptr = &file->private_data;
+	d.destroy = is_bdev;
 	err = fuse_fill_super_common(sb, &d);
 	if (err < 0)
 		goto err_free_init_req;
