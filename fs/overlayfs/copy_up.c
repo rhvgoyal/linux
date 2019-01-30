@@ -742,6 +742,8 @@ static int ovl_copy_up_meta_inode_data(struct ovl_copy_up_ctx *c)
 {
 	struct path upperpath, datapath;
 	int err;
+	void *capability = NULL;
+	size_t cap_size;
 
 	ovl_path_upper(c->dentry, &upperpath);
 	if (WARN_ON(upperpath.dentry == NULL))
@@ -751,9 +753,29 @@ static int ovl_copy_up_meta_inode_data(struct ovl_copy_up_ctx *c)
 	if (WARN_ON(datapath.dentry == NULL))
 		return -EIO;
 
+	if (c->stat.size) {
+		cap_size = ovl_getxattr(upperpath.dentry, XATTR_NAME_CAPS, &capability, &cap_size, 0);
+		if (cap_size < 0)
+			return cap_size;
+	}
+
 	err = ovl_copy_up_data(&datapath, &upperpath, c->stat.size);
-	if (err)
+	if (err) {
+		kfree(capability);
 		return err;
+	}
+
+	/*
+	 * Writing to upper file will clear security.capability xattr. We
+	 * don't want that to happen for normal copy-up operation.
+	 */
+	if (capability) {
+		err = ovl_do_setxattr(upperpath.dentry, XATTR_NAME_CAPS, capability, cap_size, 0);
+		kfree(capability);
+		if (err)
+			return err;
+	}
+
 
 	err = vfs_removexattr(upperpath.dentry, OVL_XATTR_METACOPY);
 	if (err)

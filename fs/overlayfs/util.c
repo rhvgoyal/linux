@@ -863,30 +863,60 @@ bool ovl_is_metacopy_dentry(struct dentry *dentry)
 	return (oe->numlower > 1);
 }
 
+size_t ovl_getxattr(struct dentry *dentry, char *name, void **value,
+				size_t *size, int padding)
+{
+	int res;
+	void *buf = NULL;
+
+	res = vfs_getxattr(dentry, name, NULL, 0);
+	if (res < 0) {
+		if (res == -ENODATA || res == -EOPNOTSUPP)
+			return 0;
+		goto fail;
+	}
+
+	if (res == 0)
+		goto invalid;
+
+	buf = kzalloc(res + padding, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	res = vfs_getxattr(dentry, name, buf, res);
+	if (res < 0)
+		goto fail;
+
+	if (res == 0)
+		goto invalid;
+
+	*value = buf;
+	if (size)
+		*size = res;
+
+	return res;
+
+err_free:
+	kfree(buf);
+	return res;
+fail:
+	pr_warn_ratelimited("overlayfs: failed to get xattr %s: err=%i)\n", name, res);
+	goto err_free;
+invalid:
+	pr_warn_ratelimited("overlayfs: invalid xattr %s \n", name);
+	res = -EINVAL;
+	goto err_free;
+}
+
 char *ovl_get_redirect_xattr(struct dentry *dentry, int padding)
 {
 	int res;
 	char *s, *next, *buf = NULL;
 
-	res = vfs_getxattr(dentry, OVL_XATTR_REDIRECT, NULL, 0);
-	if (res < 0) {
-		if (res == -ENODATA || res == -EOPNOTSUPP)
-			return NULL;
-		goto fail;
-	}
-
-	buf = kzalloc(res + padding + 1, GFP_KERNEL);
-	if (!buf)
-		return ERR_PTR(-ENOMEM);
-
-	if (res == 0)
-		goto invalid;
-
-	res = vfs_getxattr(dentry, OVL_XATTR_REDIRECT, buf, res);
-	if (res < 0)
-		goto fail;
-	if (res == 0)
-		goto invalid;
+	res = ovl_getxattr(dentry, OVL_XATTR_REDIRECT, (void **)&buf, NULL,
+		padding + 1);
+	if (res <= 0)
+		return ERR_PTR(res);
 
 	if (buf[0] == '/') {
 		for (s = buf; *s++ == '/'; s = next) {
@@ -900,15 +930,9 @@ char *ovl_get_redirect_xattr(struct dentry *dentry, int padding)
 	}
 
 	return buf;
-
-err_free:
-	kfree(buf);
-	return ERR_PTR(res);
-fail:
-	pr_warn_ratelimited("overlayfs: failed to get redirect (%i)\n", res);
-	goto err_free;
 invalid:
 	pr_warn_ratelimited("overlayfs: invalid redirect (%s)\n", buf);
 	res = -EINVAL;
-	goto err_free;
+	kfree(buf);
+	return ERR_PTR(res);
 }
