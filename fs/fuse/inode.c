@@ -1027,8 +1027,7 @@ static int fuse_bdi_init(struct fuse_conn *fc, struct super_block *sb)
 	return 0;
 }
 
-struct fuse_dev *fuse_dev_alloc(struct fuse_conn *fc)
-{
+struct fuse_dev *fuse_dev_alloc(void) {
 	struct fuse_dev *fud;
 	struct list_head *pq;
 
@@ -1043,16 +1042,32 @@ struct fuse_dev *fuse_dev_alloc(struct fuse_conn *fc)
 	}
 
 	fud->pq.processing = pq;
-	fud->fc = fuse_conn_get(fc);
 	fuse_pqueue_init(&fud->pq);
-
-	spin_lock(&fc->lock);
-	list_add_tail(&fud->entry, &fc->devices);
-	spin_unlock(&fc->lock);
 
 	return fud;
 }
 EXPORT_SYMBOL_GPL(fuse_dev_alloc);
+
+void fuse_dev_install(struct fuse_dev *fud, struct fuse_conn *fc) {
+	fud->fc = fuse_conn_get(fc);
+	spin_lock(&fc->lock);
+	list_add_tail(&fud->entry, &fc->devices);
+	spin_unlock(&fc->lock);
+}
+EXPORT_SYMBOL_GPL(fuse_dev_install);
+
+struct fuse_dev *fuse_dev_alloc_install(struct fuse_conn *fc)
+{
+	struct fuse_dev *fud;
+
+	fud = fuse_dev_alloc();
+	if (!fud)
+		return NULL;
+
+	fuse_dev_install(fud, fc);
+	return fud;
+}
+EXPORT_SYMBOL_GPL(fuse_dev_alloc_install);
 
 void fuse_dev_free(struct fuse_dev *fud)
 {
@@ -1122,7 +1137,7 @@ int fuse_fill_super_common(struct super_block *sb,
 		       mount_data->fiq_priv);
 	fc->release = fuse_free_conn;
 
-	fud = fuse_dev_alloc(fc);
+	fud = fuse_dev_alloc_install(fc);
 	if (!fud)
 		goto err_put_conn;
 
