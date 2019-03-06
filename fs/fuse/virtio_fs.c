@@ -241,7 +241,7 @@ static int virtio_fs_fill_super(struct super_block *sb, void *data,
 	err = -ENOMEM;
 	/* TODO take fuse_mutex around this loop? */
 	for (i = 1; i < fs->num_queues; i++) {
-		fs->fud[i] = fuse_dev_alloc(fc);
+		fs->fud[i] = fuse_dev_alloc_install(fc);
 		if (!fs->fud[i]) {
 			/* TODO */
 		}
