@@ -113,6 +113,8 @@
 #define VIRTIO_PCI_CAP_DEVICE_CFG	4
 /* PCI configuration access */
 #define VIRTIO_PCI_CAP_PCI_CFG		5
+/* Additional shared memory capability */
+#define VIRTIO_PCI_CAP_SHARED_MEMORY_CFG 8
 
 /* This is the PCI capability header: */
 struct virtio_pci_cap {
@@ -161,6 +163,14 @@ struct virtio_pci_common_cfg {
 struct virtio_pci_cfg_cap {
 	struct virtio_pci_cap cap;
 	__u8 pci_cfg_data[4]; /* Data for BAR access. */
+};
+
+/* Fields in VIRTIO_PCI_CAP_SHARED_MEMORY_CFG */
+struct virtio_pci_shm_cap {
+       struct virtio_pci_cap cap;
+       __le32 offset_hi;             /* Most sig 32 bits of offset */
+       __le32 length_hi;             /* Most sig 32 bits of length */
+        __u8   id;                    /* To distinguish shm chunks */
 };
 
 /* Macro versions of offsets for the Old Timers! */
