@@ -2363,7 +2363,7 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
 	}
 
 	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &vcpu->arch.apf.data, gpa,
-					sizeof(u32)))
+				      sizeof(struct kvm_arch_async_pf_shared)))
 		return 1;
 
 	vcpu->arch.apf.send_user_only = !(data & KVM_ASYNC_PF_SEND_ALWAYS);
@@ -9687,11 +9687,17 @@ static void kvm_del_async_pf_gfn(struct kvm_vcpu *vcpu, gfn_t gfn)
 	}
 }
 
-static int apf_put_user(struct kvm_vcpu *vcpu, u32 val)
+static int apf_put_user_u32(struct kvm_vcpu *vcpu, u32 val)
 {
-
 	return kvm_write_guest_cached(vcpu->kvm, &vcpu->arch.apf.data, &val,
 				      sizeof(val));
+}
+static int apf_put_user(struct kvm_vcpu *vcpu,
+			struct kvm_arch_async_pf_shared *val)
+{
+
+	return kvm_write_guest_cached(vcpu->kvm, &vcpu->arch.apf.data, val,
+				      sizeof(*val));
 }
 
 static int apf_get_user(struct kvm_vcpu *vcpu, u32 *val)
@@ -9705,15 +9711,19 @@ void kvm_arch_async_page_not_present(struct kvm_vcpu *vcpu,
 				     struct kvm_async_pf *work)
 {
 	struct x86_exception fault;
+	struct kvm_arch_async_pf_shared apf_shared;
 
 	trace_kvm_async_pf_not_present(work->arch.token, work->gva);
 	kvm_add_async_pf_gfn(vcpu, work->arch.gfn);
+
+	memset(&apf_shared, 0, sizeof(apf_shared));
+	apf_shared.reason = KVM_PV_REASON_PAGE_NOT_PRESENT;
 
 	if (!(vcpu->arch.apf.msr_val & KVM_ASYNC_PF_ENABLED) ||
 	    (vcpu->arch.apf.send_user_only &&
 	     kvm_x86_ops->get_cpl(vcpu) == 0))
 		kvm_make_request(KVM_REQ_APF_HALT, vcpu);
-	else if (!apf_put_user(vcpu, KVM_PV_REASON_PAGE_NOT_PRESENT)) {
+	else if (!apf_put_user(vcpu, &apf_shared)) {
 		fault.vector = PF_VECTOR;
 		fault.error_code_valid = true;
 		fault.error_code = 0;
@@ -9728,15 +9738,21 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 				 struct kvm_async_pf *work)
 {
 	struct x86_exception fault;
-	u32 val, async_pf_event = KVM_PV_REASON_PAGE_READY;
+	u32 val;
+	struct kvm_arch_async_pf_shared asyncpf_shared;
 
 	if (work->wakeup_all)
 		work->arch.token = ~0; /* broadcast wakeup */
 	else
 		kvm_del_async_pf_gfn(vcpu, work->arch.gfn);
 
-	if (work->error_code && vcpu->arch.apf.send_pf_error)
-		async_pf_event = KVM_PV_REASON_PAGE_FAULT_ERROR;
+	memset(&asyncpf_shared, 0, sizeof(asyncpf_shared));
+	asyncpf_shared.reason = KVM_PV_REASON_PAGE_READY;
+	if (work->error_code && vcpu->arch.apf.send_pf_error) {
+		asyncpf_shared.reason = KVM_PV_REASON_PAGE_FAULT_ERROR;
+		if (work->arch.gva_available)
+			asyncpf_shared.faulting_gva = work->arch.gva_val;
+	}
 
 	trace_kvm_async_pf_ready(work->arch.token, work->gva);
 
@@ -9745,7 +9761,7 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 		if (val == KVM_PV_REASON_PAGE_NOT_PRESENT &&
 		    vcpu->arch.exception.pending &&
 		    vcpu->arch.exception.nr == PF_VECTOR &&
-		    !apf_put_user(vcpu, 0)) {
+		    !apf_put_user_u32(vcpu, 0)) {
 			vcpu->arch.exception.injected = false;
 			vcpu->arch.exception.pending = false;
 			vcpu->arch.exception.nr = 0;
@@ -9753,7 +9769,7 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 			vcpu->arch.exception.error_code = 0;
 			vcpu->arch.exception.has_payload = false;
 			vcpu->arch.exception.payload = 0;
-		} else if (!apf_put_user(vcpu, async_pf_event)) {
+		} else if (!apf_put_user(vcpu, &asyncpf_shared)) {
 			fault.vector = PF_VECTOR;
 			fault.error_code_valid = true;
 			fault.error_code = 0;

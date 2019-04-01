@@ -87,6 +87,7 @@ struct kvm_task_sleep_node {
 	int cpu;
 	bool halted;
 	bool is_err;
+	unsigned long fault_addr;
 };
 
 static struct kvm_task_sleep_head {
@@ -126,8 +127,6 @@ void kvm_async_pf_task_wait(u32 token, int interrupt_kernel)
 	e = _find_apf_task(b, token);
 	if (e) {
 		/* dummy entry exist -> wake up was delivered ahead of PF */
-		if (e->is_err)
-			send_sig_info(SIGBUS, SEND_SIG_PRIV, current);
 		hlist_del(&e->link);
 		kfree(e);
 		raw_spin_unlock(&b->lock);
@@ -168,11 +167,12 @@ void kvm_async_pf_task_wait(u32 token, int interrupt_kernel)
 
 		rcu_irq_enter();
 	}
-	if (!n.halted)
+	if (!n.halted) {
 		finish_swait(&n.wq, &wait);
-
-	if (n.is_err)
-		send_sig_info(SIGBUS, SEND_SIG_PRIV, current);
+		if (n.is_err)
+			force_sig_fault(SIGBUS, BUS_ADRERR,
+					(void __user *)n.fault_addr, current);
+	}
 
 	rcu_irq_exit();
 	return;
@@ -206,7 +206,7 @@ static void apf_task_wake_all(void)
 	}
 }
 
-void kvm_async_pf_task_wake(u32 token, bool is_err)
+void kvm_async_pf_task_wake(u32 token, bool is_err, unsigned long fault_addr)
 {
 	u32 key = hash_32(token, KVM_TASK_SLEEP_HASHBITS);
 	struct kvm_task_sleep_head *b = &async_pf_sleepers[key];
@@ -238,10 +238,12 @@ again:
 		n->token = token;
 		n->cpu = smp_processor_id();
 		n->is_err = is_err;
+		n->fault_addr = fault_addr;
 		init_swait_queue_head(&n->wq);
 		hlist_add_head(&n->link, &b->list);
 	} else {
 		n->is_err = is_err;
+		n->fault_addr = fault_addr;
 		apf_task_wake_one(n);
 	}
 	raw_spin_unlock(&b->lock);
@@ -249,16 +251,16 @@ again:
 }
 EXPORT_SYMBOL_GPL(kvm_async_pf_task_wake);
 
-u32 kvm_read_and_reset_pf_reason(void)
+void kvm_read_and_reset_pf_reason(struct kvm_apf_reason *apf)
 {
-	u32 reason = 0;
-
 	if (__this_cpu_read(apf_reason.enabled)) {
-		reason = __this_cpu_read(apf_reason.reason);
+		apf->reason = __this_cpu_read(apf_reason.reason);
+		apf->faulting_gva = __this_cpu_read(apf_reason.faulting_gva);
 		__this_cpu_write(apf_reason.reason, 0);
+		__this_cpu_write(apf_reason.faulting_gva, 0);
+	} else {
+		apf->reason = 0;
 	}
-
-	return reason;
 }
 EXPORT_SYMBOL_GPL(kvm_read_and_reset_pf_reason);
 NOKPROBE_SYMBOL(kvm_read_and_reset_pf_reason);
@@ -267,8 +269,11 @@ dotraplinkage void
 do_async_page_fault(struct pt_regs *regs, unsigned long error_code)
 {
 	enum ctx_state prev_state;
+	struct kvm_apf_reason apf_data;
 
-	switch (kvm_read_and_reset_pf_reason()) {
+	kvm_read_and_reset_pf_reason(&apf_data);
+
+	switch(apf_data.reason) {
 	default:
 		do_page_fault(regs, error_code);
 		break;
@@ -280,12 +285,13 @@ do_async_page_fault(struct pt_regs *regs, unsigned long error_code)
 		break;
 	case KVM_PV_REASON_PAGE_READY:
 		rcu_irq_enter();
-		kvm_async_pf_task_wake((u32)read_cr2(), false);
+		kvm_async_pf_task_wake((u32)read_cr2(), false, 0);
 		rcu_irq_exit();
 		break;
 	case KVM_PV_REASON_PAGE_FAULT_ERROR:
 		rcu_irq_enter();
-		kvm_async_pf_task_wake((u32)read_cr2(), true);
+		kvm_async_pf_task_wake((u32)read_cr2(), true,
+				       apf_data.faulting_gva);
 		rcu_irq_exit();
 		break;
 	}

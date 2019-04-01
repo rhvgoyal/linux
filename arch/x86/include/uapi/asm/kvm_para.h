@@ -113,8 +113,15 @@ struct kvm_mmu_op_release_pt {
 
 struct kvm_vcpu_pv_apf_data {
 	__u32 reason;
-	__u8 pad[60];
+	__u8 pad1[4];
+	__u64 faulting_gva;
+	__u8 pad2[48];
 	__u32 enabled;
+};
+
+struct kvm_apf_reason {
+	u32 reason;
+	u64 faulting_gva;
 };
 
 #define KVM_PV_EOI_BIT 0

@@ -89,8 +89,8 @@ bool kvm_para_available(void);
 unsigned int kvm_arch_para_features(void);
 unsigned int kvm_arch_para_hints(void);
 void kvm_async_pf_task_wait(u32 token, int interrupt_kernel);
-void kvm_async_pf_task_wake(u32 token, bool is_err);
-u32 kvm_read_and_reset_pf_reason(void);
+void kvm_async_pf_task_wake(u32 token, bool is_err, unsigned long addr);
+void kvm_read_and_reset_pf_reason(struct kvm_apf_reason *reason);
 extern void kvm_disable_steal_time(void);
 void do_async_page_fault(struct pt_regs *regs, unsigned long error_code);
 
@@ -104,7 +104,7 @@ static inline void kvm_spinlock_init(void)
 
 #else /* CONFIG_KVM_GUEST */
 #define kvm_async_pf_task_wait(T, I) do {} while(0)
-#define kvm_async_pf_task_wake(T, I) do {} while(0)
+#define kvm_async_pf_task_wake(T, I, A) do {} while(0)
 
 static inline bool kvm_para_available(void)
 {
@@ -121,7 +121,7 @@ static inline unsigned int kvm_arch_para_hints(void)
 	return 0;
 }
 
-static inline u32 kvm_read_and_reset_pf_reason(void)
+static inline void kvm_read_and_reset_pf_reason(struct kvm_apf_reason *reason)
 {
 	return 0;
 }

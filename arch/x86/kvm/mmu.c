@@ -4003,7 +4003,8 @@ static int kvm_arch_setup_async_pf(struct kvm_vcpu *vcpu, gva_t gva, gfn_t gfn)
 	arch.gfn = gfn;
 	arch.direct_map = vcpu->arch.mmu->direct_map;
 	arch.cr3 = vcpu->arch.mmu->get_cr3(vcpu);
-
+	arch.gva_available = vcpu->arch.gva_available;
+	arch.gva_val = vcpu->arch.gva_val;
 	return kvm_setup_async_pf(vcpu, gva, kvm_vcpu_gfn_to_hva(vcpu, gfn), &arch);
 }
 
@@ -4060,7 +4061,7 @@ int kvm_handle_page_fault(struct kvm_vcpu *vcpu, u64 error_code,
 	int r = 1;
 
 	vcpu->arch.l1tf_flush_l1d = true;
-	switch (vcpu->arch.apf.host_apf_reason) {
+	switch (vcpu->arch.apf.host_apf_reason.reason) {
 	default:
 		trace_kvm_page_fault(fault_address, error_code);
 
@@ -4070,15 +4071,15 @@ int kvm_handle_page_fault(struct kvm_vcpu *vcpu, u64 error_code,
 				insn_len);
 		break;
 	case KVM_PV_REASON_PAGE_NOT_PRESENT:
-		vcpu->arch.apf.host_apf_reason = 0;
+		vcpu->arch.apf.host_apf_reason.reason = 0;
 		local_irq_disable();
 		kvm_async_pf_task_wait(fault_address, 0);
 		local_irq_enable();
 		break;
 	case KVM_PV_REASON_PAGE_READY:
-		vcpu->arch.apf.host_apf_reason = 0;
+		vcpu->arch.apf.host_apf_reason.reason = 0;
 		local_irq_disable();
-		kvm_async_pf_task_wake(fault_address, 0);
+		kvm_async_pf_task_wake(fault_address, 0, 0);
 		local_irq_enable();
 		break;
 	}

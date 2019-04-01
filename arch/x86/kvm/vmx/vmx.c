@@ -4497,7 +4497,8 @@ static int handle_exception(struct kvm_vcpu *vcpu)
 	if (is_page_fault(intr_info)) {
 		cr2 = vmcs_readl(EXIT_QUALIFICATION);
 		/* EPT won't cause page fault directly */
-		WARN_ON_ONCE(!vcpu->arch.apf.host_apf_reason && enable_ept);
+		WARN_ON_ONCE(!vcpu->arch.apf.host_apf_reason.reason &&
+			     enable_ept);
 		return kvm_handle_page_fault(vcpu, error_code, cr2, NULL, 0);
 	}
 
@@ -5055,6 +5056,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	unsigned long exit_qualification;
 	gpa_t gpa;
 	u64 error_code;
+	gva_t gva;
 
 	exit_qualification = vmcs_readl(EXIT_QUALIFICATION);
 
@@ -5091,6 +5093,11 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	       PFERR_GUEST_FINAL_MASK : PFERR_GUEST_PAGE_MASK;
 
 	vcpu->arch.exit_qualification = exit_qualification;
+	if (exit_qualification | EPT_VIOLATION_GLA_VALID) {
+		gva = vmcs_readl(GUEST_LINEAR_ADDRESS);
+		vcpu->arch.gva_available = true;
+		vcpu->arch.gva_val = gva;
+	}
 	return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 }
 
@@ -6103,7 +6110,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
 
 	/* if exit due to PF check for async PF */
 	if (is_page_fault(exit_intr_info))
-		vmx->vcpu.arch.apf.host_apf_reason = kvm_read_and_reset_pf_reason();
+		kvm_read_and_reset_pf_reason(&vmx->vcpu.arch.apf.host_apf_reason);
 
 	/* Handle machine checks before interrupts are enabled */
 	if (basic_exit_reason == EXIT_REASON_MCE_DURING_VMENTRY ||

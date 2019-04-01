@@ -737,7 +737,7 @@ struct kvm_vcpu_arch {
 		u64 msr_val;
 		u32 id;
 		bool send_user_only;
-		u32 host_apf_reason;
+		struct kvm_apf_reason host_apf_reason;
 		unsigned long nested_apf_token;
 		bool delivery_as_pf_vmexit;
 		bool send_pf_error;
@@ -775,6 +775,10 @@ struct kvm_vcpu_arch {
 	/* GPA available */
 	bool gpa_available;
 	gpa_t gpa_val;
+
+	/* GVA, if available at the time of VM exit */
+	bool gva_available;
+	gva_t gva_val;
 
 	/* be preempted when it's in kernel-mode(cpl=0) */
 	bool preempted_in_kernel;
@@ -1204,7 +1208,15 @@ struct kvm_arch_async_pf {
 	gfn_t gfn;
 	unsigned long cr3;
 	bool direct_map;
+	bool gva_available;
+	gva_t gva_val;
 };
+
+struct kvm_arch_async_pf_shared {
+	u32 reason;
+	u32 pad1;
+	u64 faulting_gva;
+} __packed;
 
 extern struct kvm_x86_ops *kvm_x86_ops;
 extern struct kmem_cache *x86_fpu_cache;
