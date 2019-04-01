@@ -29,6 +29,7 @@
 #define KVM_FEATURE_PV_TLB_FLUSH	9
 #define KVM_FEATURE_ASYNC_PF_VMEXIT	10
 #define KVM_FEATURE_PV_SEND_IPI	11
+#define KVM_FEATURE_ASYNC_PF_ERROR	12
 
 #define KVM_HINTS_REALTIME      0
 
@@ -78,6 +79,7 @@ struct kvm_clock_pairing {
 #define KVM_ASYNC_PF_ENABLED			(1 << 0)
 #define KVM_ASYNC_PF_SEND_ALWAYS		(1 << 1)
 #define KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT	(1 << 2)
+#define KVM_ASYNC_PF_SEND_ERROR			(1 << 3)
 
 /* Operations for KVM_HC_MMU_OP */
 #define KVM_MMU_OP_WRITE_PTE            1
@@ -107,6 +109,7 @@ struct kvm_mmu_op_release_pt {
 
 #define KVM_PV_REASON_PAGE_NOT_PRESENT 1
 #define KVM_PV_REASON_PAGE_READY 2
+#define KVM_PV_REASON_PAGE_FAULT_ERROR 3
 
 struct kvm_vcpu_pv_apf_data {
 	__u32 reason;

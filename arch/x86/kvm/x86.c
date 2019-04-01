@@ -2350,8 +2350,8 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
 {
 	gpa_t gpa = data & ~0x3f;
 
-	/* Bits 3:5 are reserved, Should be zero */
-	if (data & 0x38)
+	/* Bits 4:5 are reserved, Should be zero */
+	if (data & 0x30)
 		return 1;
 
 	vcpu->arch.apf.msr_val = data;
@@ -2368,6 +2368,7 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
 
 	vcpu->arch.apf.send_user_only = !(data & KVM_ASYNC_PF_SEND_ALWAYS);
 	vcpu->arch.apf.delivery_as_pf_vmexit = data & KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT;
+	vcpu->arch.apf.send_pf_error = data & KVM_ASYNC_PF_SEND_ERROR;
 	kvm_async_pf_wakeup_all(vcpu);
 	return 0;
 }
@@ -9727,12 +9728,16 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 				 struct kvm_async_pf *work)
 {
 	struct x86_exception fault;
-	u32 val;
+	u32 val, async_pf_event = KVM_PV_REASON_PAGE_READY;
 
 	if (work->wakeup_all)
 		work->arch.token = ~0; /* broadcast wakeup */
 	else
 		kvm_del_async_pf_gfn(vcpu, work->arch.gfn);
+
+	if (work->error_code && vcpu->arch.apf.send_pf_error)
+		async_pf_event = KVM_PV_REASON_PAGE_FAULT_ERROR;
+
 	trace_kvm_async_pf_ready(work->arch.token, work->gva);
 
 	if (vcpu->arch.apf.msr_val & KVM_ASYNC_PF_ENABLED &&
@@ -9748,7 +9753,7 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 			vcpu->arch.exception.error_code = 0;
 			vcpu->arch.exception.has_payload = false;
 			vcpu->arch.exception.payload = 0;
-		} else if (!apf_put_user(vcpu, KVM_PV_REASON_PAGE_READY)) {
+		} else if (!apf_put_user(vcpu, async_pf_event)) {
 			fault.vector = PF_VECTOR;
 			fault.error_code_valid = true;
 			fault.error_code = 0;

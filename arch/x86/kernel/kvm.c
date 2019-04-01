@@ -86,6 +86,7 @@ struct kvm_task_sleep_node {
 	u32 token;
 	int cpu;
 	bool halted;
+	bool is_err;
 };
 
 static struct kvm_task_sleep_head {
@@ -125,6 +126,8 @@ void kvm_async_pf_task_wait(u32 token, int interrupt_kernel)
 	e = _find_apf_task(b, token);
 	if (e) {
 		/* dummy entry exist -> wake up was delivered ahead of PF */
+		if (e->is_err)
+			send_sig_info(SIGBUS, SEND_SIG_PRIV, current);
 		hlist_del(&e->link);
 		kfree(e);
 		raw_spin_unlock(&b->lock);
@@ -168,6 +171,9 @@ void kvm_async_pf_task_wait(u32 token, int interrupt_kernel)
 	if (!n.halted)
 		finish_swait(&n.wq, &wait);
 
+	if (n.is_err)
+		send_sig_info(SIGBUS, SEND_SIG_PRIV, current);
+
 	rcu_irq_exit();
 	return;
 }
@@ -200,7 +206,7 @@ static void apf_task_wake_all(void)
 	}
 }
 
-void kvm_async_pf_task_wake(u32 token)
+void kvm_async_pf_task_wake(u32 token, bool is_err)
 {
 	u32 key = hash_32(token, KVM_TASK_SLEEP_HASHBITS);
 	struct kvm_task_sleep_head *b = &async_pf_sleepers[key];
@@ -231,10 +237,13 @@ again:
 		}
 		n->token = token;
 		n->cpu = smp_processor_id();
+		n->is_err = is_err;
 		init_swait_queue_head(&n->wq);
 		hlist_add_head(&n->link, &b->list);
-	} else
+	} else {
+		n->is_err = is_err;
 		apf_task_wake_one(n);
+	}
 	raw_spin_unlock(&b->lock);
 	return;
 }
@@ -271,7 +280,12 @@ do_async_page_fault(struct pt_regs *regs, unsigned long error_code)
 		break;
 	case KVM_PV_REASON_PAGE_READY:
 		rcu_irq_enter();
-		kvm_async_pf_task_wake((u32)read_cr2());
+		kvm_async_pf_task_wake((u32)read_cr2(), false);
+		rcu_irq_exit();
+		break;
+	case KVM_PV_REASON_PAGE_FAULT_ERROR:
+		rcu_irq_enter();
+		kvm_async_pf_task_wake((u32)read_cr2(), true);
 		rcu_irq_exit();
 		break;
 	}
@@ -334,6 +348,9 @@ static void kvm_guest_cpu_init(void)
 
 		if (kvm_para_has_feature(KVM_FEATURE_ASYNC_PF_VMEXIT))
 			pa |= KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT;
+
+		if (kvm_para_has_feature(KVM_FEATURE_ASYNC_PF_ERROR))
+			pa |= KVM_ASYNC_PF_SEND_ERROR;
 
 		wrmsrl(MSR_KVM_ASYNC_PF_EN, pa);
 		__this_cpu_write(apf_reason.enabled, 1);
