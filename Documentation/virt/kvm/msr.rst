@@ -202,19 +202,21 @@ data:
 
 		/* Used for 'page ready' events delivered via interrupt notification */
 		__u32 token;
-
-		__u8 pad[56];
+                __u32 ready_flags;
+		__u8 pad[52];
 		__u32 enabled;
 	  };
 
-	Bits 5-4 of the MSR are reserved and should be zero. Bit 0 is set to 1
+	Bits 5 of the MSR is reserved and should be zero. Bit 0 is set to 1
 	when asynchronous page faults are enabled on the vcpu, 0 when disabled.
 	Bit 1 is 1 if asynchronous page faults can be injected when vcpu is in
 	cpl == 0. Bit 2 is 1 if asynchronous page faults are delivered to L1 as
 	#PF vmexits.  Bit 2 can be set only if KVM_FEATURE_ASYNC_PF_VMEXIT is
 	present in CPUID. Bit 3 enables interrupt based delivery of 'page ready'
 	events. Bit 3 can only be set if KVM_FEATURE_ASYNC_PF_INT is present in
-	CPUID.
+	CPUID. Bit 4 enables reporting of page fault errors if hypervisor
+        encounters errors while faulting in page. Bit 4 can only be set if
+        KVM_FEATURE_ASYNC_PF_ERROR is present in CPUID.
 
 	'Page not present' events are currently always delivered as synthetic
 	#PF exception. During delivery of these events APF CR2 register contains

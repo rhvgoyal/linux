@@ -32,6 +32,7 @@
 #define KVM_FEATURE_POLL_CONTROL	12
 #define KVM_FEATURE_PV_SCHED_YIELD	13
 #define KVM_FEATURE_ASYNC_PF_INT	14
+#define KVM_FEATURE_ASYNC_PF_ERROR	15
 
 #define KVM_HINTS_REALTIME      0
 
@@ -85,6 +86,7 @@ struct kvm_clock_pairing {
 #define KVM_ASYNC_PF_SEND_ALWAYS		(1 << 1)
 #define KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT	(1 << 2)
 #define KVM_ASYNC_PF_DELIVERY_AS_INT		(1 << 3)
+#define KVM_ASYNC_PF_SEND_ERROR			(1 << 4)
 
 /* MSR_KVM_ASYNC_PF_INT */
 #define KVM_ASYNC_PF_VEC_MASK			GENMASK(7, 0)
@@ -119,14 +121,18 @@ struct kvm_mmu_op_release_pt {
 #define KVM_PV_REASON_PAGE_NOT_PRESENT 1
 #define KVM_PV_REASON_PAGE_READY 2
 
+
+/* Bit flags for ready_flags field */
+#define KVM_PV_REASON_PAGE_ERROR 1
+
 struct kvm_vcpu_pv_apf_data {
 	/* Used for 'page not present' events delivered via #PF */
 	__u32 flags;
 
 	/* Used for 'page ready' events delivered via interrupt notification */
 	__u32 token;
-
-	__u8 pad[56];
+	__u32 ready_flags;
+	__u8 pad[52];
 	__u32 enabled;
 };
 

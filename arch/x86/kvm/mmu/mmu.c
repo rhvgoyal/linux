@@ -4175,7 +4175,7 @@ int kvm_handle_page_fault(struct kvm_vcpu *vcpu, u64 error_code,
 	} else if (flags & KVM_PV_REASON_PAGE_NOT_PRESENT) {
 		vcpu->arch.apf.host_apf_flags = 0;
 		local_irq_disable();
-		kvm_async_pf_task_wait_schedule(fault_address);
+		kvm_async_pf_task_wait_schedule(fault_address, 0);
 		local_irq_enable();
 	} else {
 		WARN_ONCE(1, "Unexpected host async PF flags: %x\n", flags);

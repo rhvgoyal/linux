@@ -2690,8 +2690,8 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
 {
 	gpa_t gpa = data & ~0x3f;
 
-	/* Bits 4:5 are reserved, Should be zero */
-	if (data & 0x30)
+	/* Bits 5 is reserved, Should be zero */
+	if (data & 0x20)
 		return 1;
 
 	vcpu->arch.apf.msr_en_val = data;
@@ -2703,11 +2703,12 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
 	}
 
 	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &vcpu->arch.apf.data, gpa,
-					sizeof(u64)))
+					sizeof(u64) + sizeof(u32)))
 		return 1;
 
 	vcpu->arch.apf.send_user_only = !(data & KVM_ASYNC_PF_SEND_ALWAYS);
 	vcpu->arch.apf.delivery_as_pf_vmexit = data & KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT;
+	vcpu->arch.apf.send_pf_error = data & KVM_ASYNC_PF_SEND_ERROR;
 
 	kvm_async_pf_wakeup_all(vcpu);
 
@@ -10481,12 +10482,25 @@ static inline int apf_put_user_notpresent(struct kvm_vcpu *vcpu)
 				      sizeof(reason));
 }
 
-static inline int apf_put_user_ready(struct kvm_vcpu *vcpu, u32 token)
+static inline int apf_put_user_ready(struct kvm_vcpu *vcpu, u32 token,
+				     bool is_err)
 {
 	unsigned int offset = offsetof(struct kvm_vcpu_pv_apf_data, token);
+	int ret;
+	u32 ready_flags = 0;
 
+	if (is_err && vcpu->arch.apf.send_pf_error)
+		ready_flags = KVM_PV_REASON_PAGE_ERROR;
+
+	ret = kvm_write_guest_offset_cached(vcpu->kvm, &vcpu->arch.apf.data,
+					    &token, offset, sizeof(token));
+	if (ret < 0)
+		return ret;
+
+	offset = offsetof(struct kvm_vcpu_pv_apf_data, ready_flags);
 	return kvm_write_guest_offset_cached(vcpu->kvm, &vcpu->arch.apf.data,
-					     &token, offset, sizeof(token));
+					    &ready_flags, offset,
+					    sizeof(ready_flags));
 }
 
 static inline bool apf_pageready_slot_free(struct kvm_vcpu *vcpu)
@@ -10571,6 +10585,8 @@ bool kvm_arch_async_page_not_present(struct kvm_vcpu *vcpu,
 void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 				 struct kvm_async_pf *work)
 {
+	bool present_injected = false;
+
 	struct kvm_lapic_irq irq = {
 		.delivery_mode = APIC_DM_FIXED,
 		.vector = vcpu->arch.apf.vec
@@ -10584,16 +10600,18 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 
 	if ((work->wakeup_all || work->notpresent_injected) &&
 	    kvm_pv_async_pf_enabled(vcpu) &&
-	    !apf_put_user_ready(vcpu, work->arch.token)) {
+	    !apf_put_user_ready(vcpu, work->arch.token, work->error_code)) {
 		vcpu->arch.apf.pageready_pending = true;
 		kvm_apic_set_irq(vcpu, &irq, NULL);
+		present_injected = true;
 	}
 
-	if (work->error_code) {
+	if (work->error_code &&
+	    (!present_injected || !vcpu->arch.apf.send_pf_error)) {
 		/*
-		 * Page fault failed and we don't have a way to report
-		 * errors back to guest yet. So save this pfn and force
-		 * sync page fault next time.
+		 * Page fault failed. If we did not report error back
+		 * to guest, save this pfn and force sync page fault next
+		 * time.
 		 */
 		vcpu->arch.apf.error_gfn = work->cr2_or_gpa >> PAGE_SHIFT;
 	}

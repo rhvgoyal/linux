@@ -75,6 +75,7 @@ struct kvm_task_sleep_node {
 	struct swait_queue_head wq;
 	u32 token;
 	int cpu;
+	bool is_err;
 };
 
 static struct kvm_task_sleep_head {
@@ -97,7 +98,14 @@ static struct kvm_task_sleep_node *_find_apf_task(struct kvm_task_sleep_head *b,
 	return NULL;
 }
 
-static bool kvm_async_pf_queue_task(u32 token, struct kvm_task_sleep_node *n)
+static void handle_async_pf_error(bool user_mode)
+{
+	if (user_mode)
+		send_sig_info(SIGBUS, SEND_SIG_PRIV, current);
+}
+
+static bool kvm_async_pf_queue_task(u32 token, struct kvm_task_sleep_node *n,
+				    bool user_mode)
 {
 	u32 key = hash_32(token, KVM_TASK_SLEEP_HASHBITS);
 	struct kvm_task_sleep_head *b = &async_pf_sleepers[key];
@@ -107,6 +115,8 @@ static bool kvm_async_pf_queue_task(u32 token, struct kvm_task_sleep_node *n)
 	e = _find_apf_task(b, token);
 	if (e) {
 		/* dummy entry exist -> wake up was delivered ahead of PF */
+		if (e->is_err)
+			handle_async_pf_error(user_mode);
 		hlist_del(&e->link);
 		raw_spin_unlock(&b->lock);
 		kfree(e);
@@ -128,14 +138,14 @@ static bool kvm_async_pf_queue_task(u32 token, struct kvm_task_sleep_node *n)
  * Invoked from the async pagefault handling code or from the VM exit page
  * fault handler. In both cases RCU is watching.
  */
-void kvm_async_pf_task_wait_schedule(u32 token)
+void kvm_async_pf_task_wait_schedule(u32 token, bool user_mode)
 {
 	struct kvm_task_sleep_node n;
 	DECLARE_SWAITQUEUE(wait);
 
 	lockdep_assert_irqs_disabled();
 
-	if (!kvm_async_pf_queue_task(token, &n))
+	if (!kvm_async_pf_queue_task(token, &n, user_mode))
 		return;
 
 	for (;;) {
@@ -148,6 +158,8 @@ void kvm_async_pf_task_wait_schedule(u32 token)
 		local_irq_disable();
 	}
 	finish_swait(&n.wq, &wait);
+	if (n.is_err)
+		handle_async_pf_error(user_mode);
 }
 EXPORT_SYMBOL_GPL(kvm_async_pf_task_wait_schedule);
 
@@ -177,7 +189,7 @@ static void apf_task_wake_all(void)
 	}
 }
 
-void kvm_async_pf_task_wake(u32 token)
+void kvm_async_pf_task_wake(u32 token, bool is_err)
 {
 	u32 key = hash_32(token, KVM_TASK_SLEEP_HASHBITS);
 	struct kvm_task_sleep_head *b = &async_pf_sleepers[key];
@@ -208,9 +220,11 @@ again:
 		}
 		n->token = token;
 		n->cpu = smp_processor_id();
+		n->is_err = is_err;
 		init_swait_queue_head(&n->wq);
 		hlist_add_head(&n->link, &b->list);
 	} else {
+		n->is_err = is_err;
 		apf_task_wake_one(n);
 	}
 	raw_spin_unlock(&b->lock);
@@ -256,14 +270,15 @@ bool __kvm_handle_async_pf(struct pt_regs *regs, u32 token)
 		panic("Host injected async #PF in kernel mode\n");
 
 	/* Page is swapped out by the host. */
-	kvm_async_pf_task_wait_schedule(token);
+	kvm_async_pf_task_wait_schedule(token, user_mode(regs));
 	return true;
 }
 NOKPROBE_SYMBOL(__kvm_handle_async_pf);
 
 __visible void __irq_entry kvm_async_pf_intr(struct pt_regs *regs)
 {
-	u32 token;
+	u32 token, ready_flags;
+	bool is_err;
 
 	entering_ack_irq();
 
@@ -271,7 +286,9 @@ __visible void __irq_entry kvm_async_pf_intr(struct pt_regs *regs)
 
 	if (__this_cpu_read(apf_reason.enabled)) {
 		token = __this_cpu_read(apf_reason.token);
-		kvm_async_pf_task_wake(token);
+		ready_flags = __this_cpu_read(apf_reason.ready_flags);
+		is_err = ready_flags & KVM_PV_REASON_PAGE_ERROR;
+		kvm_async_pf_task_wake(token, is_err);
 		__this_cpu_write(apf_reason.token, 0);
 		wrmsrl(MSR_KVM_ASYNC_PF_ACK, 1);
 	}
@@ -334,6 +351,9 @@ static void kvm_guest_cpu_init(void)
 			pa |= KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT;
 
 		wrmsrl(MSR_KVM_ASYNC_PF_INT, KVM_ASYNC_PF_VECTOR);
+
+		if (kvm_para_has_feature(KVM_FEATURE_ASYNC_PF_ERROR))
+			pa |= KVM_ASYNC_PF_SEND_ERROR;
 
 		wrmsrl(MSR_KVM_ASYNC_PF_EN, pa);
 		__this_cpu_write(apf_reason.enabled, 1);

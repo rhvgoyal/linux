@@ -779,6 +779,7 @@ struct kvm_vcpu_arch {
 		bool delivery_as_pf_vmexit;
 		bool pageready_pending;
 		gfn_t error_gfn;
+		bool send_pf_error;
 	} apf;
 
 	/* OSVW MSRs (AMD only) */
@@ -1680,6 +1681,8 @@ void kvm_arch_async_page_ready(struct kvm_vcpu *vcpu,
 			       struct kvm_async_pf *work);
 void kvm_arch_async_page_present_queued(struct kvm_vcpu *vcpu);
 bool kvm_arch_can_dequeue_async_page_present(struct kvm_vcpu *vcpu);
+void kvm_arch_async_page_fault_error(struct kvm_vcpu *vcpu,
+				     struct kvm_async_pf *work);
 extern bool kvm_find_async_pf_gfn(struct kvm_vcpu *vcpu, gfn_t gfn);
 
 int kvm_skip_emulated_instruction(struct kvm_vcpu *vcpu);
