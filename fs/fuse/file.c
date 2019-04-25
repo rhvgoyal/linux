@@ -3896,6 +3896,13 @@ int fuse_dax_reclaim_dmap_locked(struct fuse_conn *fc, struct inode *inode,
 	/* Remove dax mapping from inode interval tree now */
 	fuse_dax_interval_tree_remove(dmap, &fi->dmap_tree);
 	fi->nr_dmaps--;
+
+	ret = fuse_removemapping_one(inode, dmap);
+	if (ret) {
+		pr_warn("Failed to remove mapping. offset=0x%llx len=0x%llx\n",
+			dmap->window_offset, dmap->length);
+	}
+
 	return 0;
 }
 
