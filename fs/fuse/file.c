@@ -1809,6 +1809,13 @@ static int fuse_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 	pr_debug("fuse_iomap_begin() called. pos=0x%llx length=0x%llx\n",
 			pos, length);
 
+	/*
+	 * Writes beyond end of file are not handled using dax path. Instead
+	 * a fuse write message is sent to daemon
+	 */
+	if (flags & IOMAP_WRITE && pos >= i_size_read(inode))
+		return -EIO;
+
 	iomap->offset = pos;
 	iomap->flags = 0;
 	iomap->bdev = NULL;
@@ -1929,10 +1936,33 @@ static ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	return ret;
 }
 
+static bool file_extending_write(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+
+	return (iov_iter_rw(from) == WRITE &&
+		((iocb->ki_pos) >= i_size_read(inode)));
+}
+
+static ssize_t fuse_dax_direct_write(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(iocb);
+	ssize_t ret;
+
+	ret = fuse_direct_io(&io, from, &iocb->ki_pos, FUSE_DIO_WRITE);
+	if (ret < 0)
+		return ret;
+
+	fuse_invalidate_attr(inode);
+	fuse_write_update_size(inode, iocb->ki_pos);
+	return ret;
+}
+
 static ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
-	ssize_t ret;
+	ssize_t ret, count;
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
 		if (!inode_trylock(inode))
@@ -1950,26 +1980,29 @@ static ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		goto out;
 	/* TODO file_update_time() but we don't want metadata I/O */
 
-	/* TODO handle growing the file */
-	/* Grow file here if need be. iomap_begin() does not have access
-	 * to file pointer
+	/* Do not use dax for file extending writes as its an mmap and
+	 * trying to write beyong end of existing page will generate
+	 * SIGBUS.
 	 */
-	if (iov_iter_rw(from) == WRITE &&
-	    ((iocb->ki_pos + iov_iter_count(from)) > i_size_read(inode))) {
-		ret = __fuse_file_fallocate(iocb->ki_filp, 0, iocb->ki_pos,
-						iov_iter_count(from));
-		if (ret < 0) {
-			printk("fallocate(offset=0x%llx length=0x%zx)"
-			" failed. err=%zd\n", iocb->ki_pos,
-			iov_iter_count(from), ret);
-			goto out;
-		}
-		pr_debug("fallocate(offset=0x%llx length=0x%zx)"
-		" succeed. ret=%zd\n", iocb->ki_pos, iov_iter_count(from), ret);
+	if (file_extending_write(iocb, from)) {
+		ret = fuse_dax_direct_write(iocb, from);
+		goto out;
 	}
 
 	ret = dax_iomap_rw(iocb, from, &fuse_iomap_ops);
+	if (ret < 0)
+		goto out;
 
+	/*
+	 * If part of the write was file extending, fuse dax path will not
+	 * take care of that. Do direct write instead.
+	 */
+	if (iov_iter_count(from) && file_extending_write(iocb, from)) {
+		count = fuse_dax_direct_write(iocb, from);
+		if (count < 0)
+			goto out;
+		ret += count;
+	}
 out:
 	inode_unlock(inode);
 
