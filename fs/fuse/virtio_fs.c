@@ -1057,6 +1057,7 @@ static int virtio_fs_fill_super(struct super_block *sb, char *opts,
 
 	d->fudptr = (void **)&fs->vqs[VQ_REQUEST].fud;
 	d->destroy = true; /* Send destroy request on unmount */
+	d->no_abort = 1;
 	err = fuse_fill_super_common(sb, d);
 	if (err < 0)
 		goto err_free_init_req;
