@@ -1268,6 +1268,7 @@ int fuse_fill_super_common(struct super_block *sb,
 	fc->user_id = mount_data->user_id;
 	fc->group_id = mount_data->group_id;
 	fc->max_read = max_t(unsigned, 4096, mount_data->max_read);
+	fc->no_abort = mount_data->no_abort;
 
 	/* Used by get_root_inode() */
 	sb->s_fs_info = fc;

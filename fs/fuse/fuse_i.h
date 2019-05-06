@@ -84,6 +84,7 @@ struct fuse_mount_data {
 	unsigned allow_other:1;
 	unsigned dax:1;
 	unsigned destroy:1;
+	unsigned no_abort:1;
 	unsigned max_read;
 	unsigned blksize;
 
@@ -844,6 +845,9 @@ struct fuse_conn {
 
 	/** Does the filesystem support copy_file_range? */
 	unsigned no_copy_file_range:1;
+
+	/** Do not create abort file in fuse control fs */
+	unsigned no_abort:1;
 
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
