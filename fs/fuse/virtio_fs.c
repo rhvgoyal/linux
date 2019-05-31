@@ -697,12 +697,7 @@ __releases(fiq->waitq.lock)
 	u64 unique;
 	int ret;
 
-	BUG_ON(!fiq->forget_list_head.next);
-	link = fiq->forget_list_head.next;
-	BUG_ON(link->next);
-	fiq->forget_list_head.next = NULL;
-	fiq->forget_list_tail = &fiq->forget_list_head;
-
+	link = fuse_dequeue_forget(fiq, 1, NULL);
 	unique = fuse_get_unique(fiq);
 
 	fs = fiq->priv;
