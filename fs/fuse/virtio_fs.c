@@ -31,6 +31,7 @@ struct virtio_fs_vq {
 	struct list_head queued_reqs;
 	struct delayed_work dispatch_work;
 	struct fuse_dev *fud;
+	bool connected;
 	char name[24];
 } ____cacheline_aligned_in_smp;
 
@@ -215,6 +216,12 @@ static void virtio_fs_hiprio_dispatch_work(struct work_struct *work)
 		}
 
 		list_del(&forget->list);
+		if (!fsvq->connected) {
+			spin_unlock(&fsvq->lock);
+			kfree(forget);
+			continue;
+		}
+
 		sg_init_one(&sg, forget, sizeof(*forget));
 
 		/* Enqueue the request */
@@ -425,9 +432,10 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 	if (ret < 0)
 		goto out;
 
-	for (i = 0; i < fs->nvqs; i++)
+	for (i = 0; i < fs->nvqs; i++) {
 		fs->vqs[i].vq = vqs[i];
-
+		fs->vqs[i].connected = true;
+	}
 out:
 	kfree(names);
 	kfree(callbacks);
@@ -1071,11 +1079,16 @@ err:
 static void virtio_kill_sb(struct super_block *sb)
 {
 	struct fuse_conn *fc = get_fuse_conn_super(sb);
+	struct virtio_fs *vfs = fc->iq.priv;
+	struct virtio_fs_vq *fsvq = &vfs->vqs[VQ_HIPRIO];
+
+	/* Stop forget queue. Soon destroy will be sent */
+	spin_lock(&fsvq->lock);
+	fsvq->connected = false;
+	spin_unlock(&fsvq->lock);
+
 	fuse_kill_sb_anon(sb);
-	if (fc) {
-		struct virtio_fs *vfs = fc->iq.priv;
-		virtio_fs_free_devs(vfs);
-	}
+	virtio_fs_free_devs(vfs);
 }
 
 static struct dentry *virtio_fs_mount(struct file_system_type *fs_type,
