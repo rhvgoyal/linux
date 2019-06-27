@@ -187,16 +187,8 @@ static void fuse_lookup_init(struct fuse_conn *fc, struct fuse_args *args,
 s64 fuse_get_attr_version(struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	s64 curr_version;
 
-	if (fi->version_ptr) {
-		curr_version = READ_ONCE(*fi->version_ptr);
-	} else {
-		struct fuse_conn *fc = get_fuse_conn(inode);
-		curr_version = atomic64_read(&fc->attr_ctr);
-	}
-
-	return curr_version;
+	return fi->shared_attr_version;
 }
 
 static s64 fuse_get_attr_version_shared(struct inode *inode)
@@ -273,7 +265,7 @@ static void fuse_set_version_ptr(struct inode *inode,
 
 	if (fi->version_ptr) {
 		pr_info("fuse: version_ptr = %p\n", fi->version_ptr);
-		pr_info("fuse: version = %lli\n", fi->attr_version);
+		pr_info("fuse: shared version = %lli\n", fi->shared_attr_version);
 		pr_info("fuse: current_version: %lli\n", *fi->version_ptr);
 	}
 }
@@ -307,6 +299,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 		struct fuse_forget_link *forget;
 		s64 attr_version;
 		s64 parent_version;
+		u64 attr_ctr;
 
 		/* For negative dentries, always do a fresh lookup */
 		if (!inode)
@@ -323,10 +316,11 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 		if (!forget)
 			goto out;
 
+		attr_ctr = atomic64_read(&fc->attr_ctr);
 		attr_version = fuse_get_attr_version(inode);
 
 		parent = dget_parent(entry);
-		parent_version = fuse_get_attr_version_shared(d_inode(parent));
+		parent_version = fuse_get_attr_version(d_inode(parent));
 		fuse_lookup_init(fc, &args, get_node_id(d_inode(parent)),
 				 &entry->d_name, &outarg, &outver);
 		ret = fuse_simple_request(fc, &args);
@@ -366,7 +360,7 @@ static int fuse_dentry_revalidate(struct dentry *entry, unsigned int flags)
 		forget_all_cached_acls(inode);
 		fuse_change_attributes(inode, &outarg.attr,
 				       entry_attr_timeout(&outarg),
-				       attr_version);
+				       attr_version, attr_ctr);
 		fuse_change_entry_timeout(entry, &outarg);
 		fuse_dentry_setver(entry, &outver, parent_version);
 	} else if (inode) {
@@ -1062,14 +1056,17 @@ static int fuse_do_getattr(struct inode *inode, struct kstat *stat,
 	int err;
 	struct fuse_getattr_in inarg;
 	struct fuse_attr_out outarg;
+	struct fuse_entryver_out outver;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	FUSE_ARGS(args);
 	s64 attr_version;
+	u64 attr_ctr;
 
-	attr_version = fuse_get_attr_version(inode);
+	attr_ctr = atomic64_read(&fc->attr_ctr);
 
 	memset(&inarg, 0, sizeof(inarg));
 	memset(&outarg, 0, sizeof(outarg));
+	memset(&outver, 0, sizeof(outver));
 	/* Directories have separate file-handle space */
 	if (file && S_ISREG(inode->i_mode)) {
 		struct fuse_file *ff = file->private_data;
@@ -1082,9 +1079,13 @@ static int fuse_do_getattr(struct inode *inode, struct kstat *stat,
 	args.in.numargs = 1;
 	args.in.args[0].size = sizeof(inarg);
 	args.in.args[0].value = &inarg;
-	args.out.numargs = 1;
+	args.out.numargs = 2;
+	args.out.argvar = 1;
 	args.out.args[0].size = sizeof(outarg);
 	args.out.args[0].value = &outarg;
+        args->out.args[1].size = sizeof(struct fuse_entryver_out);
+        args->out.args[1].value = &outver;
+
 	err = fuse_simple_request(fc, &args);
 	if (!err) {
 		if ((inode->i_mode ^ outarg.attr.mode) & S_IFMT) {
@@ -1093,7 +1094,7 @@ static int fuse_do_getattr(struct inode *inode, struct kstat *stat,
 		} else {
 			fuse_change_attributes(inode, &outarg.attr,
 					       attr_timeout(&outarg),
-					       attr_version);
+					       attr_version, attr_ctr);
 			if (stat)
 				fuse_fillattr(inode, &outarg.attr, stat);
 		}
@@ -1105,7 +1106,7 @@ static bool fuse_shared_version_mismatch(struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
-	return fuse_version_mismatch(inode, READ_ONCE(fi->attr_version));
+	return fuse_version_mismatch(inode, READ_ONCE(fi->shared_attr_version));
 }
 
 static int fuse_update_get_attr(struct inode *inode, struct file *file,

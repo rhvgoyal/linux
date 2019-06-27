@@ -173,7 +173,9 @@ struct fuse_inode {
 	u64 orig_ino;
 
 	/** Version of last attribute change */
-	s64 attr_version;
+	u64 attr_ctr;
+
+	s64 shared_attr_version;
 
 	union {
 		/* Write related fields (regular file only) */
@@ -1048,7 +1050,7 @@ void fuse_init_symlink(struct inode *inode);
  * Change attributes of an inode
  */
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
-			    u64 attr_valid, s64 attr_version);
+			    u64 attr_valid, s64 attr_version, u64 attr_ctr);
 
 void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 				   u64 attr_valid, s64 attr_version);

@@ -81,7 +81,8 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->inval_mask = 0;
 	fi->nodeid = 0;
 	fi->nlookup = 0;
-	fi->attr_version = 0;
+	fi->attr_ctr = 0;
+	fi->shared_attr_version = 0;
 	fi->state = 0;
 	fi->version_ptr = NULL;
 	fi->orig_ino = 0;
@@ -163,6 +164,7 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 
 	lockdep_assert_held(&fi->lock);
 
+	fi->attr_ctr = atomic64_inc_return(&fc->attr_ctr);
 	fi->i_time = attr_valid;
 	WRITE_ONCE(fi->inval_mask, 0);
 
@@ -198,12 +200,12 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 
 	fi->orig_ino = attr->ino;
 	smp_wmb();
-	WRITE_ONCE(fi->attr_version, attr_version);
+	WRITE_ONCE(fi->shared_attr_version, attr_version);
 
 }
 
 void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
-			    u64 attr_valid, s64 attr_version)
+			    u64 attr_valid, s64 attr_version, u64 attr_ctr)
 {
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -216,7 +218,7 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 		spin_unlock(&fi->lock);
 		return;
 	}
-	if (attr_version != 0 && fi->attr_version > attr_version) {
+	if (attr_ctr != 0 && fi->attr_ctr > attr_ctr) {
 		spin_unlock(&fi->lock);
 		return;
 	}
