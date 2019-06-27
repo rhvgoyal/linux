@@ -522,7 +522,6 @@ static bool vp_get_shm_region(struct virtio_device *vdev,
 	u64 offset, len;
 	phys_addr_t phys_addr;
 	size_t bar_len;
-	char *bar_name;
 	int ret;
 
 	if (!virtio_pci_find_shm_cap(pci_dev, id, &bar, &offset, &len)) {
@@ -530,7 +529,9 @@ static bool vp_get_shm_region(struct virtio_device *vdev,
 	}
 
 	ret = pci_request_region(pci_dev, bar, "virtio-pci-shm");
-	if (ret < 0) {
+	if (ret == -EBUSY) {
+		printk("pci_request_region() returned -EBUSY. Ignoring it.\n");
+	} else if (ret < 0) {
 		dev_err(&pci_dev->dev, "%s: failed to request BAR\n",
 			__func__);
 		return false;
