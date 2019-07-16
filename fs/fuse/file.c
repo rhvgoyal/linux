@@ -4167,7 +4167,7 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 				   unsigned long nr_to_free)
 {
 	struct fuse_dax_mapping *dmap, *pos, *temp;
-	int ret, nr_freed = 0, nr_eagain = 0;
+	int ret, nr_freed = 0;
 	u64 dmap_start = 0, window_offset = 0;
 	struct inode *inode = NULL;
 
@@ -4175,12 +4175,6 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 	while(1) {
 		if (nr_freed >= nr_to_free)
 			break;
-
-		if (nr_eagain > 20) {
-			queue_delayed_work(system_long_wq, &fc->dax_free_work,
-						msecs_to_jiffies(10));
-			return 0;
-		}
 
 		dmap = NULL;
 		spin_lock(&fc->lock);
@@ -4225,7 +4219,7 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 
 		/* Could not get inode lock. Try next element */
 		if (ret == -EAGAIN) {
-			nr_eagain++;
+			cond_resched();
 			continue;
 		}
 		nr_freed++;
