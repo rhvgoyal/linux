@@ -4074,8 +4074,11 @@ static struct fuse_dax_mapping *alloc_dax_mapping_reclaim(struct fuse_conn *fc,
 		if (dmap)
 			return dmap;
 
-		if (fi->nr_dmaps)
-			return inode_reclaim_first_dmap(fc, inode);
+		if (fi->nr_dmaps) {
+			dmap = inode_reclaim_first_dmap(fc, inode);
+			if (dmap)
+				return dmap;
+		}
 		/*
 		 * There are no mappings which can be reclaimed.
 		 * Wait for one.
