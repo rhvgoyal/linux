@@ -4235,16 +4235,10 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 
 		ret = lookup_and_reclaim_dmap(fc, inode, dmap_start);
 		iput(inode);
-		if (ret && ret != -EAGAIN) {
+		if (ret) {
 			printk("%s(window_offset=0x%llx) failed. err=%d\n",
 				__func__, window_offset, ret);
 			return ret;
-		}
-
-		/* Could not get inode lock. Try next element */
-		if (ret == -EAGAIN) {
-			cond_resched();
-			continue;
 		}
 		nr_freed++;
 	}
