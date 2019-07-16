@@ -1959,12 +1959,8 @@ static int fuse_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 		if (pos >= i_size_read(inode))
 			goto iomap_hole;
 
-		/* Can't do reclaim in fault path yet due to lock ordering.
-		 * Read path takes shared inode lock and that's not sufficient
-		 * for inline range reclaim. Caller needs to drop lock, wait
-		 * and retry.
-		 */
-		if (flags & IOMAP_FAULT || !(flags & IOMAP_WRITE)) {
+		/* Can't do reclaim in fault path yet due to lock ordering. */
+		if (flags & IOMAP_FAULT) {
 			alloc_dmap = alloc_dax_mapping(fc);
 			if (!alloc_dmap)
 				return -ENOSPC;
@@ -2050,18 +2046,7 @@ static const struct iomap_ops fuse_iomap_ops = {
 static ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
-	struct fuse_conn *fc = get_fuse_conn(inode);
 	ssize_t ret;
-	bool retry = false;
-
-retry:
-	if (retry && !(fc->nr_free_ranges > 0)) {
-		ret = -EINTR;
-		if (wait_event_killable_exclusive(fc->dax_range_waitq,
-						  (fc->nr_free_ranges > 0))) {
-			goto out;
-		}
-	}
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
 		if (!inode_trylock_shared(inode))
@@ -2073,19 +2058,7 @@ retry:
 	ret = dax_iomap_rw(iocb, to, &fuse_iomap_ops);
 	inode_unlock_shared(inode);
 
-	/* If a dax range could not be allocated and it can't be reclaimed
-	 * inline, then drop inode lock and retry. Range reclaim logic
-	 * requires exclusive access to inode lock.
-	 *
-	 * TODO: What if -ENOSPC needs to be returned to user space. Fix it.
-	 */
-	if (ret == -ENOSPC) {
-		retry = true;
-		goto retry;
-	}
 	/* TODO file_accessed(iocb->f_filp) */
-
-out:
 	return ret;
 }
 
@@ -4056,16 +4029,24 @@ static int reclaim_one_dmap_locked(struct fuse_conn *fc, struct inode *inode,
 	return 0;
 }
 
+#define fuse_dax_interval_tree_foreach(dmap, root, start, last)           \
+	for (dmap = fuse_dax_interval_tree_iter_first(root, start, last); \
+	     dmap; dmap = fuse_dax_interval_tree_iter_next(dmap, start, last))
+
 /* First first mapping in the tree and free it. */
 static struct fuse_dax_mapping *
 inode_reclaim_first_dmap_locked(struct fuse_conn *fc, struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_mapping *dmap;
+	struct fuse_dax_mapping *dmap = NULL;
 	int ret;
 
-	/* Find fuse dax mapping at file offset inode. */
-	dmap = fuse_dax_interval_tree_iter_first(&fi->dmap_tree, 0, -1);
+	fuse_dax_interval_tree_foreach(dmap, &fi->dmap_tree, 0, -1) {
+		if (refcount_read(&dmap->refcnt) > 1)
+			continue;
+		break;
+	}
+
 	if (!dmap)
 		return NULL;
 
@@ -4087,8 +4068,6 @@ inode_reclaim_first_dmap_locked(struct fuse_conn *fc, struct inode *inode)
 /*
  * First first mapping in the tree and free it and return it. Do not add
  * it back to free pool.
- *
- * This is called with inode lock held.
  */
 static struct fuse_dax_mapping *inode_reclaim_first_dmap(struct fuse_conn *fc,
 							 struct inode *inode)
