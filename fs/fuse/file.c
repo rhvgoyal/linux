@@ -4095,6 +4095,43 @@ static int reclaim_one_dmap_locked(struct fuse_conn *fc, struct inode *inode,
 	return 0;
 }
 
+static void fuse_wait_dax_page(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+        up_write(&fi->i_mmap_sem);
+        schedule();
+        down_write(&fi->i_mmap_sem);
+}
+
+/* Should be called with fi->i_mmap_sem lock held exclusively */
+static int __fuse_break_dax_layouts(struct inode *inode, bool *retry)
+{
+	struct page *page;
+
+	page = dax_layout_busy_page(inode->i_mapping);
+	if (!page)
+		return 0;
+
+	*retry = true;
+	return ___wait_var_event(&page->_refcount,
+			atomic_read(&page->_refcount) == 1, TASK_INTERRUPTIBLE,
+			0, 0, fuse_wait_dax_page(inode));
+}
+
+static int fuse_break_dax_layouts(struct inode *inode)
+{
+	bool	retry;
+	int	ret;
+
+	do {
+		retry = false;
+		ret = __fuse_break_dax_layouts(inode, &retry);
+        } while (ret == 0 && retry);
+
+        return ret;
+}
+
 /* First first mapping in the tree and free it. */
 static struct fuse_dax_mapping *
 inode_reclaim_first_dmap_locked(struct fuse_conn *fc, struct inode *inode)
@@ -4134,11 +4171,24 @@ static struct fuse_dax_mapping *inode_reclaim_first_dmap(struct fuse_conn *fc,
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	struct fuse_dax_mapping *dmap;
+	int ret;
 
 	down_write(&fi->i_mmap_sem);
+
+	/* Make sure there are references to inode pages using
+	 * get_user_pages()
+	 *
+	 * TODO: Only check for page range inside dmap (and not whole inode)
+	 */
+	ret = fuse_break_dax_layouts(inode);
+	if (ret) {
+		dmap = ERR_PTR(ret);
+		goto out_mmap_sem;
+	}
 	down_write(&fi->i_dmap_sem);
 	dmap = inode_reclaim_first_dmap_locked(fc, inode);
 	up_write(&fi->i_dmap_sem);
+out_mmap_sem:
 	up_write(&fi->i_mmap_sem);
 	return dmap;
 }
@@ -4220,9 +4270,14 @@ static int lookup_and_reclaim_dmap(struct fuse_conn *fc, struct inode *inode,
 	if (!inode_trylock(inode))
 		return -EAGAIN;
 	down_write(&fi->i_mmap_sem);
+	ret = fuse_break_dax_layouts(inode);
+	if (ret)
+		goto out_mmap_sem;
+
 	down_write(&fi->i_dmap_sem);
 	ret = lookup_and_reclaim_dmap_locked(fc, inode, dmap_start);
 	up_write(&fi->i_dmap_sem);
+out_mmap_sem:
 	up_write(&fi->i_mmap_sem);
 	inode_unlock(inode);
 	return ret;
