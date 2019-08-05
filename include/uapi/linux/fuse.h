@@ -853,8 +853,6 @@ struct fuse_setupmapping_out {
 };
 
 struct fuse_removemapping_in {
-        /* An already open handle */
-        uint64_t	fh;
 	/* number of fuse_removemapping_one follows */
 	uint32_t        count;
 };
