@@ -1875,6 +1875,18 @@ static void fuse_fill_iomap(struct inode *inode, loff_t pos, loff_t length,
 		if (flags & IOMAP_FAULT)
 			iomap->length = ALIGN(len, PAGE_SIZE);
 		iomap->type = IOMAP_MAPPED;
+
+		/*
+		 * increace refcnt so that reclaim code knows this dmap is in
+		 * use. This assumes i_dmap_sem mutex is held either
+		 * shared/exclusive.
+		 */
+		refcount_inc(&dmap->refcnt);
+
+		/* iomap->private should be NULL */
+		WARN_ON_ONCE(iomap->private);
+		iomap->private = dmap;
+
 		pr_debug("%s: returns iomap: addr 0x%llx offset 0x%llx"
 				" length 0x%llx\n", __func__, iomap->addr,
 				iomap->offset, iomap->length);
@@ -2078,6 +2090,16 @@ static int fuse_iomap_end(struct inode *inode, loff_t pos, loff_t length,
 			  ssize_t written, unsigned flags,
 			  struct iomap *iomap)
 {
+	struct fuse_dax_mapping *dmap = iomap->private;
+
+	if (dmap) {
+		if (refcount_dec_and_test(&dmap->refcnt)) {
+			/* refcount should not hit 0. This object only goes
+			 * away when fuse connection goes away */
+			WARN_ON_ONCE(1);
+		}
+	}
+
 	/* DAX writes beyond end-of-file aren't handled using iomap, so the
 	 * file size is unchanged and there is nothing to do here.
 	 */
@@ -4073,6 +4095,10 @@ static int reclaim_one_dmap_locked(struct fuse_conn *fc, struct inode *inode,
 	int ret;
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
+	/*
+	 * igrab() was done to make sure inode won't go under us, and this
+	 * further avoids the race with evict().
+	 */
 	ret = dmap_writeback_invalidate(inode, dmap);
 
 	/* TODO: What to do if above fails? For now,
@@ -4242,14 +4268,16 @@ static int lookup_and_reclaim_dmap_locked(struct fuse_conn *fc,
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	struct fuse_dax_mapping *dmap;
 
-	WARN_ON(!inode_is_locked(inode));
-
 	/* Find fuse dax mapping at file offset inode. */
 	dmap = fuse_dax_interval_tree_iter_first(&fi->dmap_tree, dmap_start,
-							dmap_start);
+						 dmap_start);
 
 	/* Range already got cleaned up by somebody else */
 	if (!dmap)
+		return 0;
+
+	/* still in use. */
+	if (refcount_read(&dmap->refcnt) > 1)
 		return 0;
 
 	ret = reclaim_one_dmap_locked(fc, inode, dmap);
@@ -4266,10 +4294,9 @@ static int lookup_and_reclaim_dmap_locked(struct fuse_conn *fc,
 /*
  * Free a range of memory.
  * Locking.
- * 1. Take inode->i_rwsem to prever further read/write.
- * 2. Take fuse_inode->i_mmap_sem to block dax faults.
- * 3. Take fuse_inode->i_dmap_sem to protect interval tree. It might not
- *    be strictly necessary as lock 1 and 2 seem sufficient.
+ * 1. Take fuse_inode->i_mmap_sem to block dax faults.
+ * 2. Take fuse_inode->i_dmap_sem to protect interval tree and also to make
+ *    sure read/write can not reuse a dmap which we might be freeing.
  */
 static int lookup_and_reclaim_dmap(struct fuse_conn *fc, struct inode *inode,
 				   u64 dmap_start, u64 dmap_end)
@@ -4277,12 +4304,6 @@ static int lookup_and_reclaim_dmap(struct fuse_conn *fc, struct inode *inode,
 	int ret;
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
-	/*
-	 * If process is blocked waiting for memory while holding inode
-	 * lock, we will deadlock. So continue to free next range.
-	 */
-	if (!inode_trylock(inode))
-		return -EAGAIN;
 	down_write(&fi->i_mmap_sem);
 	ret = fuse_break_dax_layouts(inode, dmap_start, dmap_end);
 	if (ret) {
@@ -4296,7 +4317,6 @@ static int lookup_and_reclaim_dmap(struct fuse_conn *fc, struct inode *inode,
 	up_write(&fi->i_dmap_sem);
 out_mmap_sem:
 	up_write(&fi->i_mmap_sem);
-	inode_unlock(inode);
 	return ret;
 }
 
@@ -4329,6 +4349,10 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 
 		list_for_each_entry_safe(pos, temp, &fc->busy_ranges,
 						busy_list) {
+			/* skip this range if it's in use. */
+			if (refcount_read(&pos->refcnt) > 1)
+				continue;
+
 			inode = igrab(pos->inode);
 			/*
 			 * This inode is going away. That will free
