@@ -4247,6 +4247,47 @@ static int reclaim_one_dmap_locked(struct fuse_conn *fc, struct inode *inode,
 	return 0;
 }
 
+static void fuse_wait_dax_page(struct inode *inode)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+
+        up_write(&fi->i_mmap_sem);
+        schedule();
+        down_write(&fi->i_mmap_sem);
+}
+
+/* Should be called with fi->i_mmap_sem lock held exclusively */
+static int __fuse_break_dax_layouts(struct inode *inode, bool *retry,
+				    loff_t start, loff_t end)
+{
+	struct page *page;
+
+	page = dax_layout_busy_page_range(inode->i_mapping, start, end);
+	if (!page)
+		return 0;
+
+	*retry = true;
+	return ___wait_var_event(&page->_refcount,
+			atomic_read(&page->_refcount) == 1, TASK_INTERRUPTIBLE,
+			0, 0, fuse_wait_dax_page(inode));
+}
+
+/* dmap_end == 0 leads to unmapping of whole file */
+static int fuse_break_dax_layouts(struct inode *inode, u64 dmap_start,
+				  u64 dmap_end)
+{
+	bool	retry;
+	int	ret;
+
+	do {
+		retry = false;
+		ret = __fuse_break_dax_layouts(inode, &retry, dmap_start,
+					       dmap_end);
+        } while (ret == 0 && retry);
+
+        return ret;
+}
+
 /* First first mapping in the tree and free it. */
 static struct fuse_dax_mapping *
 inode_reclaim_first_dmap_locked(struct fuse_conn *fc, struct inode *inode)
@@ -4286,11 +4327,26 @@ static struct fuse_dax_mapping *inode_reclaim_first_dmap(struct fuse_conn *fc,
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	struct fuse_dax_mapping *dmap;
+	int ret;
 
 	down_write(&fi->i_mmap_sem);
+
+	/* Make sure there are references to inode pages using
+	 * get_user_pages()
+	 *
+	 * TODO: Only check for page range inside dmap (and not whole inode)
+	 */
+	ret = fuse_break_dax_layouts(inode, 0, 0);
+	if (ret) {
+		printk("virtio_fs: fuse_break_dax_layouts() failed. err=%d\n",
+		       ret);
+		dmap = ERR_PTR(ret);
+		goto out_mmap_sem;
+	}
 	down_write(&fi->i_dmap_sem);
 	dmap = inode_reclaim_first_dmap_locked(fc, inode);
 	up_write(&fi->i_dmap_sem);
+out_mmap_sem:
 	up_write(&fi->i_mmap_sem);
 	return dmap;
 }
@@ -4360,7 +4416,7 @@ static int lookup_and_reclaim_dmap_locked(struct fuse_conn *fc,
  *    be strictly necessary as lock 1 and 2 seem sufficient.
  */
 static int lookup_and_reclaim_dmap(struct fuse_conn *fc, struct inode *inode,
-			    u64 dmap_start)
+				   u64 dmap_start, u64 dmap_end)
 {
 	int ret;
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -4372,9 +4428,17 @@ static int lookup_and_reclaim_dmap(struct fuse_conn *fc, struct inode *inode,
 	if (!inode_trylock(inode))
 		return -EAGAIN;
 	down_write(&fi->i_mmap_sem);
+	ret = fuse_break_dax_layouts(inode, dmap_start, dmap_end);
+	if (ret) {
+		printk("virtio_fs: fuse_break_dax_layouts() failed. err=%d\n",
+		       ret);
+		goto out_mmap_sem;
+	}
+
 	down_write(&fi->i_dmap_sem);
 	ret = lookup_and_reclaim_dmap_locked(fc, inode, dmap_start);
 	up_write(&fi->i_dmap_sem);
+out_mmap_sem:
 	up_write(&fi->i_mmap_sem);
 	inode_unlock(inode);
 	return ret;
@@ -4385,7 +4449,7 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 {
 	struct fuse_dax_mapping *dmap, *pos, *temp;
 	int ret, nr_freed = 0, nr_eagain = 0;
-	u64 dmap_start = 0, window_offset = 0;
+	u64 dmap_start = 0, window_offset = 0, dmap_end = 0;
 	struct inode *inode = NULL;
 
 	/* Pick first busy range and free it for now*/
@@ -4425,6 +4489,7 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 			dmap = pos;
 			list_move_tail(&dmap->busy_list, &fc->busy_ranges);
 			dmap_start = dmap->start;
+			dmap_end = dmap->end;
 			window_offset = dmap->window_offset;
 			break;
 		}
@@ -4432,7 +4497,7 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 		if (!dmap)
 			return 0;
 
-		ret = lookup_and_reclaim_dmap(fc, inode, dmap_start);
+		ret = lookup_and_reclaim_dmap(fc, inode, dmap_start, dmap_end);
 		iput(inode);
 		if (ret && ret != -EAGAIN) {
 			printk("%s(window_offset=0x%llx) failed. err=%d\n",
