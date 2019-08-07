@@ -668,6 +668,7 @@ static int fuse_dax_mem_range_init(struct fuse_conn *fc,
 		range->window_offset = i * FUSE_DAX_MEM_RANGE_SZ;
 		range->length = FUSE_DAX_MEM_RANGE_SZ;
 		INIT_LIST_HEAD(&range->busy_list);
+		refcount_set(&range->refcnt, 1);
 		list_add_tail(&range->list, &mem_ranges);
 	}
 
