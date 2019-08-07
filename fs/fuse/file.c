@@ -483,7 +483,6 @@ static int dmap_removemapping_one(struct inode *inode,
 	struct fuse_removemapping_in inarg;
 
 	memset(&inarg, 0, sizeof(inarg));
-	/* TODO: fill in inarg.fh when available */
 	inarg.count = 1;
 	memset(&forget_one, 0, sizeof(forget_one));
 	forget_one.moffset = dmap->window_offset;
