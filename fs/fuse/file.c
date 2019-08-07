@@ -4483,19 +4483,13 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 				   unsigned long nr_to_free)
 {
 	struct fuse_dax_mapping *dmap, *pos, *temp;
-	int ret, nr_freed = 0, nr_eagain = 0;
+	int ret, nr_freed = 0;
 	u64 dmap_start = 0, window_offset = 0, dmap_end = 0;
 	struct inode *inode = NULL;
 
 	/* Pick first busy range and free it for now*/
 	while(1) {
 		if (nr_freed >= nr_to_free)
-			break;
-
-		/* If we are not making progress, return and we will be
-		 * rescheduled again. Let other workers run.
-		 */
-		if (nr_eagain > 20)
 			break;
 
 		dmap = NULL;
@@ -4538,19 +4532,11 @@ static int try_to_free_dmap_chunks(struct fuse_conn *fc,
 
 		ret = lookup_and_reclaim_dmap(fc, inode, dmap_start, dmap_end);
 		iput(inode);
-		if (ret && ret != -EAGAIN) {
+		if (ret) {
 			printk("%s(window_offset=0x%llx) failed. err=%d\n",
 				__func__, window_offset, ret);
 			return ret;
 		}
-
-		/* Could not get inode lock. Try next element */
-		if (ret == -EAGAIN) {
-			cond_resched();
-			nr_eagain++;
-			continue;
-		}
-		nr_eagain = 0;
 		nr_freed++;
 	}
 	return 0;
