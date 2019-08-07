@@ -110,6 +110,9 @@ struct fuse_dax_mapping {
 
 	/* Is this mapping read-only or read-write */
 	bool writable;
+
+	/* reference count when the mapping is used by dax iomap. */
+	refcount_t refcnt;
 };
 
 /** FUSE inode */
