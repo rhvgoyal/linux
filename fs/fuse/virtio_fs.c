@@ -999,8 +999,7 @@ static int virtio_fs_fill_super(struct super_block *sb)
 err_free_init_req:
 	fuse_request_free(init_req);
 err_free_fuse_devs:
-	for (i = 0; i < fs->nvqs; i++)
-		fuse_dev_free(fs->vqs[i].fud);
+	virtio_fs_free_devs(fs);
 err:
 	return err;
 }
