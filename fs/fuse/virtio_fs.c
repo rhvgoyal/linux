@@ -180,9 +180,6 @@ static void virtio_fs_free_devs(struct virtio_fs *fs)
 		if (!fsvq->fud)
 			continue;
 
-		flush_work(&fsvq->done_work);
-		flush_delayed_work(&fsvq->dispatch_work);
-
 		/* TODO need to quiesce/end_requests/decrement dev_count */
 		fuse_dev_free(fsvq->fud);
 		fsvq->fud = NULL;
@@ -994,6 +991,8 @@ static int virtio_fs_fill_super(struct super_block *sb)
 		atomic_inc(&fc->dev_count);
 	}
 
+	/* Previous unmount will stop all queues. Start these again */
+	virtio_fs_start_all_queues(fs);
 	fuse_send_init(fc, init_req);
 	return 0;
 
@@ -1026,6 +1025,12 @@ static void virtio_kill_sb(struct super_block *sb)
 	virtio_fs_drain_all_queues(vfs);
 
 	fuse_kill_sb_anon(sb);
+
+	/* fuse_kill_sb_anon() must have sent destroy. Stop all queues
+	 * and drain one more time and free fuse devices.
+	 */
+	virtio_fs_stop_all_queues(vfs);
+	virtio_fs_drain_all_queues(vfs);
 	virtio_fs_free_devs(vfs);
 }
 
