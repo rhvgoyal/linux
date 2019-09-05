@@ -360,6 +360,9 @@ static void virtio_fs_requests_done_work(struct work_struct *work)
 		spin_unlock(&fpq->lock);
 
 		fuse_request_end(fc, req);
+		spin_lock(&fsvq->lock);
+		fsvq->in_flight--;
+		spin_unlock(&fsvq->lock);
 	}
 }
 
@@ -769,6 +772,7 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 		goto out;
 	}
 
+	fsvq->in_flight++;
 	notify = virtqueue_kick_prepare(vq);
 
 	spin_unlock(&fsvq->lock);
