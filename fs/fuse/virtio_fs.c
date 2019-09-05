@@ -112,6 +112,19 @@ static void virtio_fs_drain_all_queues(struct virtio_fs *fs)
 	}
 }
 
+static void virtio_fs_start_all_queues(struct virtio_fs *fs)
+{
+	struct virtio_fs_vq *fsvq;
+	int i;
+
+	for (i = 0; i < fs->nvqs; i++) {
+		fsvq = &fs->vqs[i];
+		spin_lock(&fsvq->lock);
+		fsvq->connected = true;
+		spin_unlock(&fsvq->lock);
+	}
+}
+
 /* Add a new instance to the list or return -EEXIST if tag name exists*/
 static int virtio_fs_add_instance(struct virtio_fs *fs)
 {
@@ -483,10 +496,10 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 	if (ret < 0)
 		goto out;
 
-	for (i = 0; i < fs->nvqs; i++) {
+	for (i = 0; i < fs->nvqs; i++)
 		fs->vqs[i].vq = vqs[i];
-		fs->vqs[i].connected = true;
-	}
+
+	virtio_fs_start_all_queues(fs);
 out:
 	kfree(names);
 	kfree(callbacks);
