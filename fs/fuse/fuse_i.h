@@ -479,6 +479,11 @@ struct fuse_iqueue_ops {
 	 */
 	void (*wake_pending_and_unlock)(struct fuse_iqueue *fiq)
 		__releases(fiq->waitq.lock);
+
+	/**
+	 * Put a reference on fiq_priv.
+	 */
+	void (*put)(struct fuse_iqueue *fiq);
 };
 
 /** /dev/fuse input queue operations */
