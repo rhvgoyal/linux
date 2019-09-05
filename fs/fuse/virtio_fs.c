@@ -63,6 +63,55 @@ static inline struct fuse_pqueue *vq_to_fpq(struct virtqueue *vq)
 	return &vq_to_fsvq(vq)->fud->pq;
 }
 
+static void virtio_fs_drain_queue(struct virtio_fs_vq *fsvq)
+{
+	WARN_ON(fsvq->in_flight < 0);
+
+	/* Wait for in flight requests to finish.*/
+	while (1) {
+		spin_lock(&fsvq->lock);
+		if (!fsvq->in_flight) {
+			spin_unlock(&fsvq->lock);
+			break;
+		}
+		spin_unlock(&fsvq->lock);
+		usleep_range(1000, 2000);
+	}
+
+	flush_work(&fsvq->done_work);
+	flush_delayed_work(&fsvq->dispatch_work);
+}
+
+static inline void drain_hiprio_queued_reqs(struct virtio_fs_vq *fsvq)
+{
+	struct virtio_fs_forget *forget;
+
+	spin_lock(&fsvq->lock);
+	while (1) {
+		forget = list_first_entry_or_null(&fsvq->queued_reqs,
+						struct virtio_fs_forget, list);
+		if (!forget)
+			break;
+		list_del(&forget->list);
+		kfree(forget);
+	}
+	spin_unlock(&fsvq->lock);
+}
+
+static void virtio_fs_drain_all_queues(struct virtio_fs *fs)
+{
+	struct virtio_fs_vq *fsvq;
+	int i;
+
+	for (i = 0; i < fs->nvqs; i++) {
+		fsvq = &fs->vqs[i];
+		if (i == VQ_HIPRIO)
+			drain_hiprio_queued_reqs(fsvq);
+
+		virtio_fs_drain_queue(fsvq);
+	}
+}
+
 /* Add a new instance to the list or return -EEXIST if tag name exists*/
 static int virtio_fs_add_instance(struct virtio_fs *fs)
 {
@@ -511,6 +560,7 @@ static void virtio_fs_remove(struct virtio_device *vdev)
 	struct virtio_fs *fs = vdev->priv;
 
 	virtio_fs_stop_all_queues(fs);
+	virtio_fs_drain_all_queues(fs);
 	vdev->config->reset(vdev);
 	virtio_fs_cleanup_vqs(vdev, fs);
 
@@ -865,37 +915,6 @@ retry:
 	}
 }
 
-static void virtio_fs_flush_hiprio_queue(struct virtio_fs_vq *fsvq)
-{
-	struct virtio_fs_forget *forget;
-
-	WARN_ON(fsvq->in_flight < 0);
-
-	/* Go through pending forget requests and free them */
-	spin_lock(&fsvq->lock);
-	while (1) {
-		forget = list_first_entry_or_null(&fsvq->queued_reqs,
-					struct virtio_fs_forget, list);
-		if (!forget)
-			break;
-		list_del(&forget->list);
-		kfree(forget);
-	}
-
-	spin_unlock(&fsvq->lock);
-
-	/* Wait for in flight requests to finish.*/
-	while (1) {
-		spin_lock(&fsvq->lock);
-		if (!fsvq->in_flight) {
-			spin_unlock(&fsvq->lock);
-			break;
-		}
-		spin_unlock(&fsvq->lock);
-		usleep_range(1000, 2000);
-	}
-}
-
 const static struct fuse_iqueue_ops virtio_fs_fiq_ops = {
 	.wake_forget_and_unlock		= virtio_fs_wake_forget_and_unlock,
 	.wake_interrupt_and_unlock	= virtio_fs_wake_interrupt_and_unlock,
@@ -988,7 +1007,7 @@ static void virtio_kill_sb(struct super_block *sb)
 	spin_lock(&fsvq->lock);
 	fsvq->connected = false;
 	spin_unlock(&fsvq->lock);
-	virtio_fs_flush_hiprio_queue(fsvq);
+	virtio_fs_drain_all_queues(vfs);
 
 	fuse_kill_sb_anon(sb);
 	virtio_fs_free_devs(vfs);
