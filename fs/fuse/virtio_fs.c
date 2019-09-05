@@ -446,7 +446,7 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 	vq_callback_t **callbacks;
 	const char **names;
 	unsigned int i;
-	int ret;
+	int ret = 0;
 
 	virtio_cread(vdev, struct virtio_fs_config, num_queues,
 		     &fs->num_queues);
@@ -454,9 +454,7 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 		return -EINVAL;
 
 	fs->nvqs = 1 + fs->num_queues;
-
-	fs->vqs = devm_kcalloc(&vdev->dev, fs->nvqs,
-				sizeof(fs->vqs[VQ_HIPRIO]), GFP_KERNEL);
+	fs->vqs = kcalloc(fs->nvqs, sizeof(fs->vqs[VQ_HIPRIO]), GFP_KERNEL);
 	if (!fs->vqs)
 		return -ENOMEM;
 
@@ -504,6 +502,8 @@ out:
 	kfree(names);
 	kfree(callbacks);
 	kfree(vqs);
+	if (ret)
+		kfree(fs->vqs);
 	return ret;
 }
 
@@ -519,7 +519,7 @@ static int virtio_fs_probe(struct virtio_device *vdev)
 	struct virtio_fs *fs;
 	int ret;
 
-	fs = devm_kzalloc(&vdev->dev, sizeof(*fs), GFP_KERNEL);
+	fs = kzalloc(sizeof(*fs), GFP_KERNEL);
 	if (!fs)
 		return -ENOMEM;
 	vdev->priv = fs;
@@ -552,6 +552,7 @@ out_vqs:
 
 out:
 	vdev->priv = NULL;
+	kfree(fs);
 	return ret;
 }
 
@@ -582,6 +583,8 @@ static void virtio_fs_remove(struct virtio_device *vdev)
 	mutex_unlock(&virtio_fs_mutex);
 
 	vdev->priv = NULL;
+	kfree(fs->vqs);
+	kfree(fs);
 }
 
 #ifdef CONFIG_PM_SLEEP
