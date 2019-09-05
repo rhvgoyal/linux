@@ -208,7 +208,6 @@ static void virtio_fs_free_devs(struct virtio_fs *fs)
 		if (!fsvq->fud)
 			continue;
 
-		/* TODO need to quiesce/end_requests/decrement dev_count */
 		fuse_dev_free(fsvq->fud);
 		fsvq->fud = NULL;
 	}
@@ -1022,7 +1021,6 @@ static int virtio_fs_fill_super(struct super_block *sb)
 		if (i == VQ_REQUEST)
 			continue; /* already initialized */
 		fuse_dev_install(fsvq->fud, fc);
-		atomic_inc(&fc->dev_count);
 	}
 
 	/* Previous unmount will stop all queues. Start these again */
