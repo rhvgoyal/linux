@@ -698,14 +698,15 @@ static unsigned int sg_init_fuse_args(struct scatterlist *sg,
 }
 
 /* Add a request to a virtqueue and kick the device */
-static int virtio_fs_enqueue_req(struct virtqueue *vq, struct fuse_req *req)
+static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
+				 struct fuse_req *req)
 {
 	/* requests need at least 4 elements */
 	struct scatterlist *stack_sgs[6];
 	struct scatterlist stack_sg[ARRAY_SIZE(stack_sgs)];
 	struct scatterlist **sgs = stack_sgs;
 	struct scatterlist *sg = stack_sg;
-	struct virtio_fs_vq *fsvq;
+	struct virtqueue *vq;
 	unsigned int argbuf_used = 0;
 	unsigned int out_sgs = 0;
 	unsigned int in_sgs = 0;
@@ -752,9 +753,9 @@ static int virtio_fs_enqueue_req(struct virtqueue *vq, struct fuse_req *req)
 	for (i = 0; i < total_sgs; i++)
 		sgs[i] = &sg[i];
 
-	fsvq = vq_to_fsvq(vq);
 	spin_lock(&fsvq->lock);
 
+	vq = fsvq->vq;
 	ret = virtqueue_add_sgs(vq, sgs, out_sgs, in_sgs, req, GFP_ATOMIC);
 	if (ret < 0) {
 		/* TODO handle full virtqueue */
@@ -824,7 +825,7 @@ __releases(fiq->waitq.lock)
 	/* TODO check for FR_INTERRUPTED? */
 
 retry:
-	ret = virtio_fs_enqueue_req(fs->vqs[queue_id].vq, req);
+	ret = virtio_fs_enqueue_req(&fs->vqs[queue_id], req);
 	if (ret < 0) {
 		if (ret == -ENOMEM || ret == -ENOSPC) {
 			/* Virtqueue full. Retry submission */
