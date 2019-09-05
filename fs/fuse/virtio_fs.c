@@ -200,8 +200,6 @@ static void virtio_fs_free_devs(struct virtio_fs *fs)
 {
 	unsigned int i;
 
-	/* TODO lock */
-
 	for (i = 0; i < fs->nvqs; i++) {
 		struct virtio_fs_vq *fsvq = &fs->vqs[i];
 
