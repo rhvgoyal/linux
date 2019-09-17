@@ -47,11 +47,15 @@ struct virtio_fs {
 	unsigned int num_queues;      /* number of request queues */
 };
 
-struct virtio_fs_forget {
+struct virtio_fs_forget_req {
 	struct fuse_in_header ih;
 	struct fuse_forget_in arg;
+};
+
+struct virtio_fs_forget {
 	/* This request can be temporarily queued on virt queue */
 	struct list_head list;
+	struct virtio_fs_forget_req req;
 };
 
 static inline struct virtio_fs_vq *vq_to_fsvq(struct virtqueue *vq)
@@ -242,11 +246,14 @@ static void virtio_fs_hiprio_done_work(struct work_struct *work)
 	do {
 		unsigned int len;
 		void *req;
+		struct virtio_fs_forget *forget;
 
 		virtqueue_disable_cb(vq);
 
 		while ((req = virtqueue_get_buf(vq, &len)) != NULL) {
-			kfree(req);
+			forget = container_of(req, struct virtio_fs_forget,
+					      req);
+			kfree(forget);
 			dec_in_flight_req(fsvq);
 		}
 	} while (!virtqueue_enable_cb(vq) && likely(!virtqueue_is_broken(vq)));
@@ -265,6 +272,7 @@ static void send_forget_request(struct virtio_fs_vq *fsvq,
 	struct virtqueue *vq;
 	int ret;
 	bool notify;
+	struct virtio_fs_forget_req *req = &forget->req;
 
 	spin_lock(&fsvq->lock);
 	if (!fsvq->connected) {
@@ -274,11 +282,11 @@ static void send_forget_request(struct virtio_fs_vq *fsvq,
 		goto out;
 	}
 
-	sg_init_one(&sg, forget, sizeof(*forget));
+	sg_init_one(&sg, req, sizeof(*req));
 	vq = fsvq->vq;
 	dev_dbg(&vq->vdev->dev, "%s\n", __func__);
 
-	ret = virtqueue_add_outbuf(vq, &sg, 1, forget, GFP_ATOMIC);
+	ret = virtqueue_add_outbuf(vq, &sg, 1, req, GFP_ATOMIC);
 	if (ret < 0) {
 		if (ret == -ENOMEM || ret == -ENOSPC) {
 			pr_debug("virtio-fs: Could not queue FORGET: err=%d."
@@ -665,6 +673,7 @@ __releases(fiq->lock)
 {
 	struct fuse_forget_link *link;
 	struct virtio_fs_forget *forget;
+	struct virtio_fs_forget_req *req;
 	struct virtio_fs *fs;
 	struct virtio_fs_vq *fsvq;
 	u64 unique;
@@ -678,14 +687,15 @@ __releases(fiq->lock)
 
 	/* Allocate a buffer for the request */
 	forget = kmalloc(sizeof(*forget), GFP_NOFS | __GFP_NOFAIL);
+	req = &forget->req;
 
-	forget->ih = (struct fuse_in_header){
+	req->ih = (struct fuse_in_header){
 		.opcode = FUSE_FORGET,
 		.nodeid = link->forget_one.nodeid,
 		.unique = unique,
-		.len = sizeof(*forget),
+		.len = sizeof(*req),
 	};
-	forget->arg = (struct fuse_forget_in){
+	req->arg = (struct fuse_forget_in){
 		.nlookup = link->forget_one.nlookup,
 	};
 
