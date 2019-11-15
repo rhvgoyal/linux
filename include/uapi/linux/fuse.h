@@ -481,6 +481,7 @@ enum fuse_notify_code {
 	FUSE_NOTIFY_STORE = 4,
 	FUSE_NOTIFY_RETRIEVE = 5,
 	FUSE_NOTIFY_DELETE = 6,
+	FUSE_NOTIFY_LOCK = 7,
 	FUSE_NOTIFY_CODE_MAX,
 };
 
@@ -866,6 +867,12 @@ struct fuse_notify_retrieve_in {
 	uint32_t	dummy2;
 	uint64_t	dummy3;
 	uint64_t	dummy4;
+};
+
+struct fuse_notify_lock_out {
+	uint64_t	id;
+	int32_t		error;
+	int32_t		padding;
 };
 
 /* Device ioctls: */
