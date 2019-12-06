@@ -468,18 +468,21 @@ struct fuse_fs_context {
 	int fd;
 	unsigned int rootmode;
 	kuid_t user_id;
+	bool user_id_show;
 	kgid_t group_id;
+	bool group_id_show;
 	bool is_bdev:1;
 	bool fd_present:1;
 	bool rootmode_present:1;
 	bool user_id_present:1;
 	bool group_id_present:1;
 	bool default_permissions:1;
+	bool default_permissions_show:1;
 	bool allow_other:1;
+	bool allow_other_show:1;
 	bool destroy:1;
 	bool no_control:1;
 	bool no_force_umount:1;
-	bool no_mount_options:1;
 	unsigned int max_read;
 	unsigned int blksize;
 	const char *subtype;
@@ -509,9 +512,11 @@ struct fuse_conn {
 
 	/** The user id for this mount */
 	kuid_t user_id;
+	bool user_id_show:1;
 
 	/** The group id for this mount */
 	kgid_t group_id;
+	bool group_id_show:1;
 
 	/** The pid namespace for this mount */
 	struct pid_namespace *pid_ns;
@@ -695,9 +700,13 @@ struct fuse_conn {
 
 	/** Check permissions based on the file mode or not? */
 	unsigned default_permissions:1;
+	bool default_permissions_show:1;
 
 	/** Allow other than the mounter user to access the filesystem ? */
 	unsigned allow_other:1;
+
+	/** Show allow_other in mount options */
+	bool allow_other_show:1;
 
 	/** Does the filesystem support copy_file_range? */
 	unsigned no_copy_file_range:1;
@@ -713,9 +722,6 @@ struct fuse_conn {
 
 	/** Do not allow MNT_FORCE umount */
 	unsigned int no_force_umount:1;
-
-	/* Do not show mount options */
-	unsigned int no_mount_options:1;
 
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
