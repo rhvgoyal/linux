@@ -845,7 +845,8 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		if (err)
 			goto out;
 
-		if (upperdentry && unlikely(ovl_dentry_remote(upperdentry))) {
+		if (upperdentry &&
+		    unlikely(!ovl_dentry_valid_upper(upperdentry))) {
 			dput(upperdentry);
 			err = -EREMOTE;
 			goto out;

@@ -751,7 +751,7 @@ static int ovl_mount_dir(const char *name, struct path *path)
 		err = ovl_mount_dir_noesc(tmp, path);
 
 		if (!err)
-			if (ovl_dentry_remote(path->dentry)) {
+			if (!ovl_dentry_valid_upper(path->dentry)) {
 				pr_err("overlayfs: filesystem on '%s' not supported as upperdir\n",
 				       tmp);
 				path_put_init(path);
@@ -792,7 +792,7 @@ static int ovl_lower_dir(const char *name, struct path *path,
 
 	*stack_depth = max(*stack_depth, path->mnt->mnt_sb->s_stack_depth);
 
-	if (ovl_dentry_remote(path->dentry))
+	if (ovl_dentry_remote(path->dentry) || ovl_dentry_union(path->dentry))
 		*remote = true;
 
 	/*

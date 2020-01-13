@@ -102,11 +102,31 @@ struct ovl_entry *ovl_alloc_entry(unsigned int numlower)
 	return oe;
 }
 
+bool ovl_dentry_union(struct dentry *dentry)
+{
+	return dentry->d_flags & DCACHE_OP_REAL;
+}
+
 bool ovl_dentry_remote(struct dentry *dentry)
 {
 	return dentry->d_flags &
-		(DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE |
-		 DCACHE_OP_REAL);
+		(DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE);
+}
+
+bool ovl_dentry_valid_upper(struct dentry *dentry)
+{
+	struct file_system_type *fs_type;
+
+	if (ovl_dentry_union(dentry))
+		return false;
+
+	fs_type = dentry->d_sb->s_type;
+
+	/* Provide an exception for virtiofs */
+	if (ovl_dentry_remote(dentry) && strcmp(fs_type->name, "virtiofs"))
+		return false;
+
+	return true;
 }
 
 bool ovl_dentry_weird(struct dentry *dentry)
