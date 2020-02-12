@@ -80,6 +80,7 @@ xfs_bmbt_to_iomap(
 	iomap->length = XFS_FSB_TO_B(mp, imap->br_blockcount);
 	iomap->bdev = target->bt_bdev;
 	iomap->dax_dev = target->bt_daxdev;
+	iomap->dax_offset = get_start_sect(iomap->bdev);
 	iomap->flags = flags;
 
 	if (xfs_ipincount(ip) &&
@@ -103,6 +104,7 @@ xfs_hole_to_iomap(
 	iomap->length = XFS_FSB_TO_B(ip->i_mount, end_fsb - offset_fsb);
 	iomap->bdev = target->bt_bdev;
 	iomap->dax_dev = target->bt_daxdev;
+	iomap->dax_offset = get_start_sect(iomap->bdev);
 }
 
 static inline xfs_fileoff_t

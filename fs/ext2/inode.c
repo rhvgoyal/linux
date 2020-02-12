@@ -823,6 +823,7 @@ static int ext2_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 	iomap->bdev = inode->i_sb->s_bdev;
 	iomap->offset = (u64)first_block << blkbits;
 	iomap->dax_dev = sbi->s_daxdev;
+	iomap->dax_offset = get_start_sect(iomap->bdev);
 
 	if (ret == 0) {
 		iomap->type = IOMAP_HOLE;

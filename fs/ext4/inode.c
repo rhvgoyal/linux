@@ -3330,6 +3330,7 @@ static void ext4_set_iomap(struct inode *inode, struct iomap *iomap,
 
 	iomap->bdev = inode->i_sb->s_bdev;
 	iomap->dax_dev = EXT4_SB(inode->i_sb)->s_daxdev;
+	iomap->dax_offset = get_start_sect(iomap->bdev);
 	iomap->offset = (u64) map->m_lblk << blkbits;
 	iomap->length = (u64) map->m_len << blkbits;
 
