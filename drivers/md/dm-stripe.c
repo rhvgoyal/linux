@@ -316,7 +316,8 @@ static long stripe_dax_direct_access(struct dm_target *ti, pgoff_t pgoff,
 	dax_dev = sc->stripe[stripe].dev->dax_dev;
 	bdev = sc->stripe[stripe].dev->bdev;
 
-	ret = bdev_dax_pgoff(bdev, dev_sector, nr_pages * PAGE_SIZE, &pgoff);
+	ret = dax_pgoff(get_start_sect(bdev), dev_sector, nr_pages * PAGE_SIZE,
+			&pgoff);
 	if (ret)
 		return ret;
 	return dax_direct_access(dax_dev, pgoff, nr_pages, kaddr, pfn);
@@ -336,7 +337,7 @@ static size_t stripe_dax_copy_from_iter(struct dm_target *ti, pgoff_t pgoff,
 	dax_dev = sc->stripe[stripe].dev->dax_dev;
 	bdev = sc->stripe[stripe].dev->bdev;
 
-	if (bdev_dax_pgoff(bdev, dev_sector, ALIGN(bytes, PAGE_SIZE), &pgoff))
+	if (dax_pgoff(get_start_sect(bdev), dev_sector, ALIGN(bytes, PAGE_SIZE),		      &pgoff))
 		return 0;
 	return dax_copy_from_iter(dax_dev, pgoff, addr, bytes, i);
 }
@@ -355,7 +356,8 @@ static size_t stripe_dax_copy_to_iter(struct dm_target *ti, pgoff_t pgoff,
 	dax_dev = sc->stripe[stripe].dev->dax_dev;
 	bdev = sc->stripe[stripe].dev->bdev;
 
-	if (bdev_dax_pgoff(bdev, dev_sector, ALIGN(bytes, PAGE_SIZE), &pgoff))
+	if (dax_pgoff(get_start_sect(bdev), dev_sector, ALIGN(bytes, PAGE_SIZE),
+		      &pgoff))
 		return 0;
 	return dax_copy_to_iter(dax_dev, pgoff, addr, bytes, i);
 }

@@ -952,7 +952,8 @@ static long log_writes_dax_direct_access(struct dm_target *ti, pgoff_t pgoff,
 	sector_t sector = pgoff * PAGE_SECTORS;
 	int ret;
 
-	ret = bdev_dax_pgoff(lc->dev->bdev, sector, nr_pages * PAGE_SIZE, &pgoff);
+	ret = dax_pgoff(get_start_sect(lc->dev->bdev), sector,
+			nr_pages * PAGE_SIZE, &pgoff);
 	if (ret)
 		return ret;
 	return dax_direct_access(lc->dev->dax_dev, pgoff, nr_pages, kaddr, pfn);
@@ -966,7 +967,8 @@ static size_t log_writes_dax_copy_from_iter(struct dm_target *ti,
 	sector_t sector = pgoff * PAGE_SECTORS;
 	int err;
 
-	if (bdev_dax_pgoff(lc->dev->bdev, sector, ALIGN(bytes, PAGE_SIZE), &pgoff))
+	if (dax_pgoff(get_start_sect(lc->dev->bdev), sector,
+		      ALIGN(bytes, PAGE_SIZE), &pgoff))
 		return 0;
 
 	/* Don't bother doing anything if logging has been disabled */
@@ -989,7 +991,8 @@ static size_t log_writes_dax_copy_to_iter(struct dm_target *ti,
 	struct log_writes_c *lc = ti->private;
 	sector_t sector = pgoff * PAGE_SECTORS;
 
-	if (bdev_dax_pgoff(lc->dev->bdev, sector, ALIGN(bytes, PAGE_SIZE), &pgoff))
+	if (dax_pgoff(get_start_sect(lc->dev->bdev), sector,
+		      ALIGN(bytes, PAGE_SIZE), &pgoff))
 		return 0;
 	return dax_copy_to_iter(lc->dev->dax_dev, pgoff, addr, bytes, i);
 }
