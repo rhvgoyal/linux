@@ -43,19 +43,6 @@ EXPORT_SYMBOL_GPL(dax_read_unlock);
 #ifdef CONFIG_BLOCK
 #include <linux/blkdev.h>
 
-int bdev_dax_pgoff(struct block_device *bdev, sector_t sector, size_t size,
-		pgoff_t *pgoff)
-{
-	phys_addr_t phys_off = (get_start_sect(bdev) + sector) * 512;
-
-	if (pgoff)
-		*pgoff = PHYS_PFN(phys_off);
-	if (phys_off % PAGE_SIZE || size % PAGE_SIZE)
-		return -EINVAL;
-	return 0;
-}
-EXPORT_SYMBOL(bdev_dax_pgoff);
-
 int dax_pgoff(sector_t dax_offset, sector_t sector, size_t size, pgoff_t *pgoff)
 {
 	phys_addr_t phys_off = (dax_offset + sector) * 512;
