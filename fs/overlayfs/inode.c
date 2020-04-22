@@ -37,6 +37,17 @@ int ovl_setattr(struct dentry *dentry, struct iattr *attr)
 
 		/* Truncate should trigger data copy up as well */
 		full_copy_up = true;
+
+		/* If open(O_TRUNC) is done, VFS calls ->setattr with
+		 * ATTR_OPEN set. Overlayfs does not pass O_TRUNC flag
+		 * to underlying filesystem during open. Do not pass
+		 * ATTR_OPEN. This disables optimization in fuse which
+		 * assumes open(O_TRUNC) already set file size to 0. But
+		 * we never passed O_TRUNC to fuse. So by clearing ATTR_OPEN,
+		 * fuse will be forced to set ->setattr() request to
+		 * server.
+		 */
+		attr->ia_valid &= ~ATTR_OPEN;
 	}
 
 	if (!full_copy_up)
