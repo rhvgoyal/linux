@@ -104,7 +104,11 @@
 #define HYPERV_STIMER0_VECTOR		0xed
 #endif
 
-#define LOCAL_TIMER_VECTOR		0xec
+#ifdef CONFIG_KVM_GUEST
+#define KVM_ASYNC_PF_VECTOR		0xec
+#endif
+
+#define LOCAL_TIMER_VECTOR		0xeb
 
 #define NR_VECTORS			 256
 

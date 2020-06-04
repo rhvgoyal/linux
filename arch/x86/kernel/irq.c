@@ -160,6 +160,15 @@ int arch_show_interrupts(struct seq_file *p, int prec)
 		seq_puts(p, "  Hyper-V stimer0 interrupts\n");
 	}
 #endif
+#ifdef CONFIG_KVM_GUEST
+	if (test_bit(KVM_ASYNC_PF_VECTOR, system_vectors)) {
+		seq_printf(p, "%*s: ", prec, "APF");
+		for_each_online_cpu(j)
+			seq_printf(p, "%10u ",
+				   irq_stats(j)->kvm_async_pf_pageready_count);
+		seq_puts(p, "  KVM async PF page ready interrupts\n");
+	}
+#endif
 	seq_printf(p, "%*s: %10u\n", prec, "ERR", atomic_read(&irq_err_count));
 #if defined(CONFIG_X86_IO_APIC)
 	seq_printf(p, "%*s: %10u\n", prec, "MIS", atomic_read(&irq_mis_count));
