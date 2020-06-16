@@ -207,6 +207,7 @@ struct kvm_async_pf {
 	struct kvm_arch_async_pf arch;
 	bool   wakeup_all;
 	bool notpresent_injected;
+	int error_code;
 };
 
 void kvm_clear_async_pf_completion_queue(struct kvm_vcpu *vcpu);

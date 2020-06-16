@@ -52,6 +52,7 @@ static void async_pf_execute(struct work_struct *work)
 	gpa_t cr2_or_gpa = apf->cr2_or_gpa;
 	int locked = 1;
 	bool first;
+	long ret;
 
 	might_sleep();
 
@@ -61,10 +62,13 @@ static void async_pf_execute(struct work_struct *work)
 	 * access remotely.
 	 */
 	down_read(&mm->mmap_sem);
-	get_user_pages_remote(NULL, mm, addr, 1, FOLL_WRITE, NULL, NULL,
-			&locked);
+	ret = get_user_pages_remote(NULL, mm, addr, 1, FOLL_WRITE, NULL, NULL,
+				    &locked);
 	if (locked)
 		up_read(&mm->mmap_sem);
+
+	if (ret < 0)
+		apf->error_code = ret;
 
 	if (IS_ENABLED(CONFIG_KVM_ASYNC_PF_SYNC))
 		kvm_arch_async_page_present(vcpu, apf);

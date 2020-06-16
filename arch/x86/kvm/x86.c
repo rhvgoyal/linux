@@ -10513,7 +10513,7 @@ static bool kvm_can_deliver_async_pf(struct kvm_vcpu *vcpu)
 	return true;
 }
 
-bool kvm_can_do_async_pf(struct kvm_vcpu *vcpu)
+bool kvm_can_do_async_pf(struct kvm_vcpu *vcpu, gfn_t gfn)
 {
 	if (unlikely(!lapic_in_kernel(vcpu) ||
 		     kvm_event_needs_reinjection(vcpu) ||
@@ -10527,7 +10527,13 @@ bool kvm_can_do_async_pf(struct kvm_vcpu *vcpu)
 	 * If interrupts are off we cannot even use an artificial
 	 * halt state.
 	 */
-	return kvm_arch_interrupt_allowed(vcpu);
+	if (!kvm_arch_interrupt_allowed(vcpu))
+		return false;
+
+	if (vcpu->arch.apf.error_gfn == gfn)
+		return false;
+
+	return true;
 }
 
 bool kvm_arch_async_page_not_present(struct kvm_vcpu *vcpu,
@@ -10581,6 +10587,15 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 	    !apf_put_user_ready(vcpu, work->arch.token)) {
 		vcpu->arch.apf.pageready_pending = true;
 		kvm_apic_set_irq(vcpu, &irq, NULL);
+	}
+
+	if (work->error_code) {
+		/*
+		 * Page fault failed and we don't have a way to report
+		 * errors back to guest yet. So save this pfn and force
+		 * sync page fault next time.
+		 */
+		vcpu->arch.apf.error_gfn = work->cr2_or_gpa >> PAGE_SHIFT;
 	}
 
 	vcpu->arch.apf.halted = false;
