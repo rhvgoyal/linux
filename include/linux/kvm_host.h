@@ -208,12 +208,14 @@ struct kvm_async_pf {
 	bool   wakeup_all;
 	bool notpresent_injected;
 	int error_code;
+	bool write;
 };
 
 void kvm_clear_async_pf_completion_queue(struct kvm_vcpu *vcpu);
 void kvm_check_async_pf_completion(struct kvm_vcpu *vcpu);
 int kvm_setup_async_pf(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
-		       unsigned long hva, struct kvm_arch_async_pf *arch);
+		       unsigned long hva, struct kvm_arch_async_pf *arch,
+		       bool write);
 int kvm_async_pf_wakeup_all(struct kvm_vcpu *vcpu);
 #endif
 

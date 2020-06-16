@@ -53,6 +53,7 @@ static void async_pf_execute(struct work_struct *work)
 	int locked = 1;
 	bool first;
 	long ret;
+	unsigned int gup_flags = 0;
 
 	might_sleep();
 
@@ -61,8 +62,10 @@ static void async_pf_execute(struct work_struct *work)
 	 * mm and might be done in another context, so we must
 	 * access remotely.
 	 */
+	if (apf->write)
+		gup_flags = FOLL_WRITE;
 	down_read(&mm->mmap_sem);
-	ret = get_user_pages_remote(NULL, mm, addr, 1, FOLL_WRITE, NULL, NULL,
+	ret = get_user_pages_remote(NULL, mm, addr, 1, gup_flags, NULL, NULL,
 				    &locked);
 	if (locked)
 		up_read(&mm->mmap_sem);
@@ -161,7 +164,8 @@ void kvm_check_async_pf_completion(struct kvm_vcpu *vcpu)
 }
 
 int kvm_setup_async_pf(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
-		       unsigned long hva, struct kvm_arch_async_pf *arch)
+		       unsigned long hva, struct kvm_arch_async_pf *arch,
+		       bool write)
 {
 	struct kvm_async_pf *work;
 
@@ -186,6 +190,7 @@ int kvm_setup_async_pf(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
 	work->addr = hva;
 	work->arch = *arch;
 	work->mm = current->mm;
+	work->write = write;
 	mmget(work->mm);
 	kvm_get_kvm(work->vcpu->kvm);
 
