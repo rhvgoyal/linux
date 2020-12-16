@@ -291,7 +291,7 @@ int ovl_syncfs(struct file *file)
 	struct super_block *sb = file->f_path.dentry->d_sb;
 	struct ovl_fs *ofs = sb->s_fs_info;
 	struct super_block *upper_sb;
-	int ret;
+	int ret, ret2;
 
 	ret = 0;
 	down_read(&sb->s_umount);
@@ -310,10 +310,18 @@ int ovl_syncfs(struct file *file)
 	ret = sync_filesystem(upper_sb);
 	up_read(&upper_sb->s_umount);
 
+	/* Update overlay sb->s_wb_err */
+	if (errseq_check(&upper_sb->s_wb_err, sb->s_wb_err)) {
+		/* Upper sb has errors since last time */
+		spin_lock(&ofs->errseq_lock);
+		errseq_check_and_advance(&upper_sb->s_wb_err, &sb->s_wb_err);
+		spin_unlock(&ofs->errseq_lock);
+	}
 
+	ret2 = errseq_check_and_advance(&sb->s_wb_err, &file->f_sb_err);
 out:
 	up_read(&sb->s_umount);
-	return ret;
+	return ret ? ret : ret2;
 }
 
 /**
@@ -1903,6 +1911,7 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 	if (!cred)
 		goto out_err;
 
+	spin_lock_init(&ofs->errseq_lock);
 	/* Is there a reason anyone would want not to share whiteouts? */
 	ofs->share_whiteout = true;
 
@@ -1975,7 +1984,7 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 
 		sb->s_stack_depth = ovl_upper_mnt(ofs)->mnt_sb->s_stack_depth;
 		sb->s_time_gran = ovl_upper_mnt(ofs)->mnt_sb->s_time_gran;
-
+		sb->s_wb_err = errseq_sample(&ovl_upper_mnt(ofs)->mnt_sb->s_wb_err);
 	}
 	oe = ovl_get_lowerstack(sb, splitlower, numlower, ofs, layers);
 	err = PTR_ERR(oe);

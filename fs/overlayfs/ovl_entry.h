@@ -79,6 +79,8 @@ struct ovl_fs {
 	atomic_long_t last_ino;
 	/* Whiteout dentry cache */
 	struct dentry *whiteout;
+	/* Protects multiple sb->s_wb_err update from upper_sb . */
+	spinlock_t errseq_lock;
 };
 
 static inline struct vfsmount *ovl_upper_mnt(struct ovl_fs *ofs)
