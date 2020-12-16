@@ -155,27 +155,38 @@ void emergency_sync(void)
 	}
 }
 
+static int generic_syncfs(struct file *file)
+{
+	int ret, ret2;
+	struct super_block *sb = file->f_path.dentry->d_sb;
+
+	down_read(&sb->s_umount);
+	ret = sync_filesystem(sb);
+	up_read(&sb->s_umount);
+
+	ret2 = errseq_check_and_advance(&sb->s_wb_err, &file->f_sb_err);
+
+	return ret ? ret : ret2;
+}
+
 /*
  * sync a single super
  */
 SYSCALL_DEFINE1(syncfs, int, fd)
 {
 	struct fd f = fdget(fd);
-	struct super_block *sb;
-	int ret, ret2;
+	int ret;
 
 	if (!f.file)
 		return -EBADF;
-	sb = f.file->f_path.dentry->d_sb;
 
-	down_read(&sb->s_umount);
-	ret = sync_filesystem(sb);
-	up_read(&sb->s_umount);
-
-	ret2 = errseq_check_and_advance(&sb->s_wb_err, &f.file->f_sb_err);
+	if (f.file->f_op->syncfs)
+		ret = f.file->f_op->syncfs(f.file);
+	else
+		ret = generic_syncfs(f.file);
 
 	fdput(f);
-	return ret ? ret : ret2;
+	return ret;
 }
 
 /**
