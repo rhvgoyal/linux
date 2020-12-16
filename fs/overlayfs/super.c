@@ -286,6 +286,36 @@ static int ovl_sync_fs(struct super_block *sb, int wait)
 	return ret;
 }
 
+int ovl_syncfs(struct file *file)
+{
+	struct super_block *sb = file->f_path.dentry->d_sb;
+	struct ovl_fs *ofs = sb->s_fs_info;
+	struct super_block *upper_sb;
+	int ret;
+
+	ret = 0;
+	down_read(&sb->s_umount);
+	if (sb_rdonly(sb))
+		goto out;
+
+	if (!ovl_upper_mnt(ofs))
+		goto out;
+
+	if (!ovl_should_sync(ofs))
+		goto out;
+
+	upper_sb = ovl_upper_mnt(ofs)->mnt_sb;
+
+	down_read(&upper_sb->s_umount);
+	ret = sync_filesystem(upper_sb);
+	up_read(&upper_sb->s_umount);
+
+
+out:
+	up_read(&sb->s_umount);
+	return ret;
+}
+
 /**
  * ovl_statfs
  * @sb: The overlayfs super block

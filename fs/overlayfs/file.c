@@ -806,6 +806,7 @@ const struct file_operations ovl_file_operations = {
 
 	.copy_file_range	= ovl_copy_file_range,
 	.remap_file_range	= ovl_remap_file_range,
+	.syncfs			= ovl_syncfs,
 };
 
 int __init ovl_aio_request_cache_init(void)

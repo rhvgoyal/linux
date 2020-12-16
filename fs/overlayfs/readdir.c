@@ -975,6 +975,7 @@ const struct file_operations ovl_dir_operations = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= ovl_compat_ioctl,
 #endif
+	.syncfs		= ovl_syncfs,
 };
 
 int ovl_check_empty_dir(struct dentry *dentry, struct list_head *list)
