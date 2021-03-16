@@ -668,6 +668,9 @@ struct fuse_conn {
 	/** Is setxattr not implemented by fs? */
 	unsigned no_setxattr:1;
 
+	/** Does file server support setxattr_v2 */
+	unsigned setxattr_v2:1;
+
 	/** Is getxattr not implemented by fs? */
 	unsigned no_getxattr:1;
 
@@ -730,6 +733,9 @@ struct fuse_conn {
 
 	/** Does the filesystem support posix acls? */
 	unsigned posix_acl:1;
+
+	/** Is file server responsible for updating mode and clearing SGID */
+	unsigned posix_acl_update_mode:1;
 
 	/** Check permissions based on the file mode or not? */
 	unsigned default_permissions:1;
