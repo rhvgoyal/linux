@@ -24,6 +24,8 @@
  */
 #define FUSE_HEADER_OVERHEAD    4
 
+#define VQ_HIPRIO_IDX	0
+
 /* List of virtio-fs device instances and a lock for the list. Also provides
  * mutual exclusion in device removal and mounting path
  */
@@ -31,8 +33,8 @@ static DEFINE_MUTEX(virtio_fs_mutex);
 static LIST_HEAD(virtio_fs_instances);
 
 enum {
-	VQ_HIPRIO,
-	VQ_REQUEST
+	VQ_TYPE_HIPRIO,
+	VQ_TYPE_REQUEST
 };
 
 #define VQ_NAME_LEN	24
@@ -651,7 +653,7 @@ static void virtio_fs_init_vq(struct virtio_fs_vq *fsvq, char *name,
 	INIT_LIST_HEAD(&fsvq->end_reqs);
 	init_completion(&fsvq->in_flight_zero);
 
-	if (vq_type == VQ_REQUEST) {
+	if (vq_type == VQ_TYPE_REQUEST) {
 		INIT_WORK(&fsvq->done_work, virtio_fs_requests_done_work);
 		INIT_DELAYED_WORK(&fsvq->dispatch_work,
 				  virtio_fs_request_dispatch_work);
@@ -680,23 +682,24 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 	/* One hiprio queue and rest are request queues */
 	fs->nvqs = 1 + fs->num_request_queues;
 	fs->first_reqq_idx = 1;
-	fs->vqs = kcalloc(fs->nvqs, sizeof(fs->vqs[VQ_HIPRIO]), GFP_KERNEL);
+	fs->vqs = kcalloc(fs->nvqs, sizeof(fs->vqs[VQ_HIPRIO_IDX]), GFP_KERNEL);
 	if (!fs->vqs)
 		return -ENOMEM;
 
-	vqs = kmalloc_array(fs->nvqs, sizeof(vqs[VQ_HIPRIO]), GFP_KERNEL);
-	callbacks = kmalloc_array(fs->nvqs, sizeof(callbacks[VQ_HIPRIO]),
+	vqs = kmalloc_array(fs->nvqs, sizeof(vqs[VQ_HIPRIO_IDX]), GFP_KERNEL);
+	callbacks = kmalloc_array(fs->nvqs, sizeof(callbacks[VQ_HIPRIO_IDX]),
 					GFP_KERNEL);
-	names = kmalloc_array(fs->nvqs, sizeof(names[VQ_HIPRIO]), GFP_KERNEL);
+	names = kmalloc_array(fs->nvqs, sizeof(names[VQ_HIPRIO_IDX]),
+			      GFP_KERNEL);
 	if (!vqs || !callbacks || !names) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	/* Initialize the hiprio/forget request virtqueue */
-	callbacks[VQ_HIPRIO] = virtio_fs_vq_done;
-	virtio_fs_init_vq(&fs->vqs[VQ_HIPRIO], "hiprio", VQ_HIPRIO);
-	names[VQ_HIPRIO] = fs->vqs[VQ_HIPRIO].name;
+	callbacks[VQ_HIPRIO_IDX] = virtio_fs_vq_done;
+	virtio_fs_init_vq(&fs->vqs[VQ_HIPRIO_IDX], "hiprio", VQ_TYPE_HIPRIO);
+	names[VQ_HIPRIO_IDX] = fs->vqs[VQ_HIPRIO_IDX].name;
 
 	/* Initialize the requests virtqueues */
 	for (i = fs->first_reqq_idx; i < fs->nvqs; i++) {
@@ -704,7 +707,7 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 
 		snprintf(vq_name, VQ_NAME_LEN, "requests.%u",
 			 i - fs->first_reqq_idx);
-		virtio_fs_init_vq(&fs->vqs[i], vq_name, VQ_REQUEST);
+		virtio_fs_init_vq(&fs->vqs[i], vq_name, VQ_TYPE_REQUEST);
 		callbacks[i] = virtio_fs_vq_done;
 		names[i] = fs->vqs[i].name;
 	}
@@ -985,7 +988,7 @@ __releases(fiq->lock)
 	unique = fuse_get_unique(fiq);
 
 	fs = fiq->priv;
-	fsvq = &fs->vqs[VQ_HIPRIO];
+	fsvq = &fs->vqs[VQ_HIPRIO_IDX];
 	spin_unlock(&fiq->lock);
 
 	/* Allocate a buffer for the request */
@@ -1359,7 +1362,7 @@ static void virtio_fs_conn_destroy(struct fuse_mount *fm)
 {
 	struct fuse_conn *fc = fm->fc;
 	struct virtio_fs *vfs = fc->iq.priv;
-	struct virtio_fs_vq *fsvq = &vfs->vqs[VQ_HIPRIO];
+	struct virtio_fs_vq *fsvq = &vfs->vqs[VQ_HIPRIO_IDX];
 
 	/* Stop dax worker. Soon evict_inodes() will be called which
 	 * will free all memory ranges belonging to all inodes.
