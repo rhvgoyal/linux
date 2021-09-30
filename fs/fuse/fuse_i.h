@@ -662,6 +662,13 @@ struct fuse_conn {
 	 */
 	unsigned handle_killpriv_v2:1;
 
+	/* Is the remote inotify capability supported by the filesystem?
+	 * If yes then all the local inotify events related to inodes
+	 * in the FUSE filesystem will be suppressed and only the remote
+	 * events will be let through.
+	 */
+	unsigned no_fsnotify:1;
+
 	/*
 	 * The following bitfields are only for optimization purposes
 	 * and hence races in setting them will not cause malfunction

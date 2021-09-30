@@ -1189,6 +1189,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				fc->setxattr_ext = 1;
 			if (flags & FUSE_SECURITY_CTX)
 				fc->init_security = 1;
+			if (!(flags & FUSE_HAVE_FSNOTIFY))
+				fc->no_fsnotify = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1240,6 +1242,9 @@ void fuse_send_init(struct fuse_mount *fm)
 		flags |= FUSE_MAP_ALIGNMENT;
 	if (fuse_is_inode_dax_mode(fm->fc->dax_mode))
 		flags |= FUSE_HAS_INODE_DAX;
+#endif
+#ifdef CONFIG_FANOTIFY ||  CONFIG_INOTIFY_USER
+	flags |= FUSE_HAVE_FSNOTIFY;
 #endif
 	if (fm->fc->auto_submounts)
 		flags |= FUSE_SUBMOUNTS;
