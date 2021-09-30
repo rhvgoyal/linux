@@ -1803,6 +1803,40 @@ static int fuse_notify(struct fuse_conn *fc, enum fuse_notify_code code,
 	}
 }
 
+/* Send a request for a watch placement to the FUSE server */
+int fuse_fsnotify_send_request(struct inode *inode, uint64_t mask)
+{
+	struct fuse_mount *fm = get_fuse_mount(inode);
+	struct fuse_notify_fsnotify_in inarg;
+	int err;
+	FUSE_ARGS(args);
+
+	/* The server does not support remote fsnotify events */
+	if (fm->fc->no_fsnotify)
+		return 0;
+
+	/*
+	 * Send the mask the action (remove, add, modify) and the
+	 * unique identifier that is the fsnotify group that is
+	 * interested in the watch to the FUSE server
+	 */
+	memset(&inarg, 0, sizeof(struct fuse_notify_fsnotify_in));
+	inarg.mask = mask;
+
+	args.opcode = FUSE_FSNOTIFY;
+	args.nodeid = get_node_id(inode);
+	args.in_numargs = 1;
+	args.in_args[0].size = sizeof(struct fuse_notify_fsnotify_in);
+	args.in_args[0].value = &inarg;
+	args.out_numargs = 0;
+	args.force = true;
+
+	err = fuse_simple_request(fm, &args);
+
+	return err;
+}
+EXPORT_SYMBOL(fuse_fsnotify_send_request);
+
 /* Look up request on processing list by unique ID */
 static struct fuse_req *request_find(struct fuse_pqueue *fpq, u64 unique)
 {
