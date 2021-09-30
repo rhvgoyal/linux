@@ -197,6 +197,9 @@
  *  
  *  7.37
  *  - add FUSE_NOTIFY_LOCK
+ *  7.36
+ *  - add FUSE_HAVE_FSNOTIFY
+ *  - add fuse_notify_fsnotify_(in,out)
  */
 
 #ifndef _LINUX_FUSE_H
@@ -356,6 +359,7 @@ struct fuse_file_lock {
  * FUSE_SECURITY_CTX:	add security context to create, mkdir, symlink, and
  *			mknod
  * FUSE_HAS_INODE_DAX:  use per inode DAX
+ * FUSE_HAVE_FSNOTIFY:	remote fsnotify/inotify event subsystem support
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -392,6 +396,7 @@ struct fuse_file_lock {
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
 #define FUSE_SECURITY_CTX	(1ULL << 32)
 #define FUSE_HAS_INODE_DAX	(1ULL << 33)
+#define FUSE_HAVE_FSNOTIFY	(1ULL << 34)
 
 /**
  * CUSE INIT request/reply flags
@@ -540,6 +545,7 @@ enum fuse_opcode {
 	FUSE_SETUPMAPPING	= 48,
 	FUSE_REMOVEMAPPING	= 49,
 	FUSE_SYNCFS		= 50,
+	FUSE_FSNOTIFY		= 51,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -557,6 +563,7 @@ enum fuse_notify_code {
 	FUSE_NOTIFY_RETRIEVE = 5,
 	FUSE_NOTIFY_DELETE = 6,
 	FUSE_NOTIFY_LOCK = 7,
+	FUSE_NOTIFY_FSNOTIFY = 8,
 	FUSE_NOTIFY_CODE_MAX,
 };
 
@@ -594,6 +601,20 @@ struct fuse_getattr_in {
 	uint32_t	getattr_flags;
 	uint32_t	dummy;
 	uint64_t	fh;
+};
+
+struct fuse_notify_fsnotify_out {
+	uint64_t inode;
+	uint32_t parent;
+	uint64_t mask;
+	uint32_t namelen;
+	uint32_t generation;
+	uint8_t notify_parent;
+	uint8_t padding[7];
+};
+
+struct fuse_notify_fsnotify_in {
+	uint64_t mask;
 };
 
 #define FUSE_COMPAT_ATTR_OUT_SIZE 96
