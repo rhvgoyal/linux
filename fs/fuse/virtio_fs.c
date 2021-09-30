@@ -545,7 +545,6 @@ static void copy_args_from_argbuf(struct fuse_args *args, struct fuse_req *req)
 static void virtio_fs_request_complete(struct fuse_req *req,
 				       struct virtio_fs_vq *fsvq)
 {
-	struct fuse_pqueue *fpq = &fsvq->fud->pq;
 	struct fuse_args *args;
 	struct fuse_args_pages *ap;
 	unsigned int len, i, thislen;
@@ -573,10 +572,6 @@ static void virtio_fs_request_complete(struct fuse_req *req,
 			}
 		}
 	}
-
-	spin_lock(&fpq->lock);
-	clear_bit(FR_SENT, &req->flags);
-	spin_unlock(&fpq->lock);
 
 	fuse_request_end(req);
 	spin_lock(&fsvq->lock);
@@ -1196,9 +1191,6 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 	spin_lock(&fpq->lock);
 	list_add_tail(&req->list, fpq->processing);
 	spin_unlock(&fpq->lock);
-	set_bit(FR_SENT, &req->flags);
-	/* matches barrier in request_wait_answer() */
-	smp_mb__after_atomic();
 
 	if (!in_flight)
 		inc_in_flight_req(fsvq);
@@ -1448,6 +1440,7 @@ static int virtio_fs_get_tree(struct fs_context *fsc)
 	fc->delete_stale = true;
 	fc->auto_submounts = true;
 	fc->sync_fs = true;
+	fc->no_interrupt = true;
 
 	/* Tell FUSE to split requests that exceed the virtqueue's size */
 	fc->max_pages_limit = min_t(unsigned int, fc->max_pages_limit,
