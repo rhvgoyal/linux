@@ -1307,7 +1307,7 @@ static int virtio_fs_fill_super(struct super_block *sb, struct fs_context *fsc)
 	}
 
 	err = -ENOMEM;
-	/* Allocate fuse_dev for hiprio and notification queues */
+	/* Allocate fuse_dev for all the queues */
 	for (i = 0; i < fs->nvqs; i++) {
 		struct virtio_fs_vq *fsvq = &fs->vqs[i];
 
