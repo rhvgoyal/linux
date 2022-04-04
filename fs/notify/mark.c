@@ -254,6 +254,7 @@ void fsnotify_put_mark(struct fsnotify_mark *mark)
 	void *objp = NULL;
 	unsigned int type = FSNOTIFY_OBJ_TYPE_DETACHED;
 	bool free_conn = false;
+	struct inode *inode = NULL;
 
 	/* Catch marks that were actually never attached to object */
 	if (!conn) {
@@ -261,6 +262,10 @@ void fsnotify_put_mark(struct fsnotify_mark *mark)
 			fsnotify_final_mark_destroy(mark);
 		return;
 	}
+
+	/* Safely get the inode within the spinlock */
+	if (conn->type == FSNOTIFY_OBJ_TYPE_INODE)
+		inode = fsnotify_conn_inode(conn);
 
 	/*
 	 * We have to be careful so that traversals of obj_list under lock can
@@ -278,6 +283,13 @@ void fsnotify_put_mark(struct fsnotify_mark *mark)
 	}
 	WRITE_ONCE(mark->connector, NULL);
 	spin_unlock(&conn->lock);
+
+	/*
+	 * If remote fsnotify is also enabled send the updated watch to the
+	 * server
+	 */
+	if (inode && inode->i_op->fsnotify_update)
+		inode->i_op->fsnotify_update(inode);
 
 	fsnotify_drop_object(type, objp);
 
@@ -800,10 +812,15 @@ void fsnotify_destroy_marks(fsnotify_connp_t *connp)
 	struct fsnotify_mark *mark, *old_mark = NULL;
 	void *objp;
 	unsigned int type;
+	struct inode *inode = NULL;
 
 	conn = fsnotify_grab_connector(connp);
 	if (!conn)
 		return;
+
+	if (conn->type == FSNOTIFY_OBJ_TYPE_INODE)
+		inode = fsnotify_conn_inode(conn);
+
 	/*
 	 * We have to be careful since we can race with e.g.
 	 * fsnotify_clear_marks_by_group() and once we drop the conn->lock, the
@@ -829,6 +846,14 @@ void fsnotify_destroy_marks(fsnotify_connp_t *connp)
 	spin_unlock(&conn->lock);
 	if (old_mark)
 		fsnotify_put_mark(old_mark);
+
+	/*
+	 * If remote fsnotify is also enabled send the updated wathc to the
+	 * server
+	 */
+	if (inode && inode->i_op->fsnotify_update)
+		inode->i_op->fsnotify_update(inode);
+
 	fsnotify_drop_object(type, objp);
 }
 
