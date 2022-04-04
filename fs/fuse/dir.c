@@ -20,6 +20,8 @@
 #include <linux/security.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
+#include <linux/fsnotify_backend.h>
+#include <linux/fanotify.h>
 
 static void fuse_advise_use_readdirplus(struct inode *dir)
 {
@@ -1888,6 +1890,32 @@ static int fuse_getattr(struct user_namespace *mnt_userns,
 	return fuse_update_get_attr(inode, NULL, stat, request_mask, flags);
 }
 
+static int fuse_fsnotify_update_mark(struct inode *inode)
+{
+	uint64_t mask;
+	/*
+	 * We have to remove the bits added to the mask before being attached
+	 * or detached to the inode, since these bits are going to be
+	 * added by the "remote" host kernel. If these bits were still enabled
+	 * in the mask that was sent to the "remote" kernel then the watch would
+	 * be rejected as an unsupported value. These bits are added by the
+	 * fsnotify subsystem thus we use the corresponding fsnotify bits here.
+	 */
+	mask = inode->i_fsnotify_mask & ~(FS_IN_IGNORED | FS_UNMOUNT |
+									  FS_IN_ONESHOT | FS_EXCL_UNLINK);
+
+	if (!inode)
+		return -EINVAL;
+
+	if (mask && !(mask & ALL_FSNOTIFY_EVENTS & ~(ALL_FSNOTIFY_DIRENT_EVENTS |
+												FS_UNMOUNT, FS_IN_IGNORED,
+												FS_ERROR)))
+		return -EINVAL;
+
+	/* Send the inode and the aggregated mask for the inode*/
+	return fuse_fsnotify_send_request(inode, mask);
+}
+
 static const struct inode_operations fuse_dir_inode_operations = {
 	.lookup		= fuse_lookup,
 	.mkdir		= fuse_mkdir,
@@ -1907,6 +1935,7 @@ static const struct inode_operations fuse_dir_inode_operations = {
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
+	.fsnotify_update = fuse_fsnotify_update_mark,
 };
 
 static const struct file_operations fuse_dir_operations = {
@@ -1929,6 +1958,7 @@ static const struct inode_operations fuse_common_inode_operations = {
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
+	.fsnotify_update = fuse_fsnotify_update_mark,
 };
 
 static const struct inode_operations fuse_symlink_inode_operations = {
@@ -1936,6 +1966,7 @@ static const struct inode_operations fuse_symlink_inode_operations = {
 	.get_link	= fuse_get_link,
 	.getattr	= fuse_getattr,
 	.listxattr	= fuse_listxattr,
+	.fsnotify_update = fuse_fsnotify_update_mark,
 };
 
 void fuse_init_common(struct inode *inode)
