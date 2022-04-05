@@ -503,7 +503,9 @@ static void convert_fuse_statfs(struct kstatfs *stbuf, struct fuse_kstatfs *attr
 	stbuf->f_files   = attr->files;
 	stbuf->f_ffree   = attr->ffree;
 	stbuf->f_namelen = attr->namelen;
-	/* fsid is left zero */
+	/* Hack the fsid for now. This needs to be generated automatically */
+	stbuf->f_fsid.val[0] = 10;
+	stbuf->f_fsid.val[1] = 300000;
 }
 
 static int fuse_statfs(struct dentry *dentry, struct kstatfs *buf)
