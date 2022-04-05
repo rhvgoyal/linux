@@ -1633,6 +1633,12 @@ static int do_fanotify_mark(int fanotify_fd, unsigned int flags, __u64 mask,
 	if (ret)
 		goto fput_and_out;
 
+	 /* We do not support fid_mode plus remote fsnotify */
+	 ret = -EPERM;
+	 if (!fid_mode && mark_type == FAN_MARK_INODE &&
+		 path.dentry->d_inode->i_op->fsnotify_update)
+			 goto fput_and_out;
+
 	if (flags & FAN_MARK_ADD) {
 		ret = fanotify_events_supported(&path, mask);
 		if (ret)
@@ -1679,9 +1685,15 @@ static int do_fanotify_mark(int fanotify_fd, unsigned int flags, __u64 mask,
 		else if (mark_type == FAN_MARK_FILESYSTEM)
 			ret = fanotify_add_sb_mark(group, mnt->mnt_sb, mask,
 						   flags, fsid);
-		else
+		else {
 			ret = fanotify_add_inode_mark(group, inode, mask,
 						      flags, fsid);
+			/* Only if the object is an inode send a request to FUSE server */
+			if (ret == 0){
+				if (inode && inode->i_op->fsnotify_update)
+					inode->i_op->fsnotify_update(inode);
+			}
+		}
 		break;
 	case FAN_MARK_REMOVE:
 		if (mark_type == FAN_MARK_MOUNT)
@@ -1690,9 +1702,15 @@ static int do_fanotify_mark(int fanotify_fd, unsigned int flags, __u64 mask,
 		else if (mark_type == FAN_MARK_FILESYSTEM)
 			ret = fanotify_remove_sb_mark(group, mnt->mnt_sb, mask,
 						      flags, umask);
-		else
+		else {
 			ret = fanotify_remove_inode_mark(group, inode, mask,
 							 flags, umask);
+			/* Only if the object is an inode send a request to FUSE server */
+			if (ret == 0){
+				if (inode && inode->i_op->fsnotify_update)
+					inode->i_op->fsnotify_update(inode);
+			}
+		}
 		break;
 	default:
 		ret = -EINVAL;
