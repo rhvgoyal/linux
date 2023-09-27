@@ -63,6 +63,9 @@ struct fuse_forget_link {
 	struct fuse_forget_link *next;
 };
 
+/* Kobject for /sys/fs/fuse */
+extern struct kobject *fuse_kobj;
+
 /** FUSE inode */
 struct fuse_inode {
 	/** Inode data */

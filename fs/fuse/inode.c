@@ -1942,7 +1942,8 @@ static void fuse_fs_cleanup(void)
 	kmem_cache_destroy(fuse_inode_cachep);
 }
 
-static struct kobject *fuse_kobj;
+struct kobject *fuse_kobj;
+EXPORT_SYMBOL(fuse_kobj);
 
 static int fuse_sysfs_init(void)
 {
