@@ -14,6 +14,7 @@
 #include "fdinfo.h"
 #include "cancel.h"
 #include "rsrc.h"
+#include "poll.h"
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 static __cold void common_tracking_show_fdinfo(struct io_ring_ctx *ctx,
@@ -54,6 +55,105 @@ static inline void napi_show_fdinfo(struct io_ring_ctx *ctx,
 {
 }
 #endif
+
+static const char *poll_events_to_str(__poll_t events, char *buf, size_t size)
+{
+	char *p = buf;
+	char *end = buf + size - 1;
+	bool first = true;
+
+	*p = '\0';
+
+	#define ADD_EVENT(mask, name) do { \
+		if (events & mask) { \
+			if (!first) { \
+				if (p < end) \
+					*p++ = '|'; \
+			} \
+			first = false; \
+			p += snprintf(p, end - p + 1, name); \
+			if (p > end) \
+				p = end; \
+		} \
+	} while (0)
+
+	ADD_EVENT(EPOLLIN, "EPOLLIN");
+	ADD_EVENT(EPOLLOUT, "EPOLLOUT");
+	ADD_EVENT(EPOLLPRI, "EPOLLPRI");
+	ADD_EVENT(EPOLLERR, "EPOLLERR");
+	ADD_EVENT(EPOLLHUP, "EPOLLHUP");
+	ADD_EVENT(EPOLLNVAL, "EPOLLNVAL");
+	ADD_EVENT(EPOLLRDHUP, "EPOLLRDHUP");
+	ADD_EVENT(EPOLLEXCLUSIVE, "EPOLLEXCLUSIVE");
+	ADD_EVENT(EPOLLWAKEUP, "EPOLLWAKEUP");
+	ADD_EVENT(EPOLLONESHOT, "EPOLLONESHOT");
+	ADD_EVENT(EPOLLET, "EPOLLET");
+
+	#undef ADD_EVENT
+
+	*end = '\0';
+	return buf;
+}
+
+static void show_poll_info(struct seq_file *m, struct io_kiocb *req)
+{
+	struct io_poll *poll;
+	char events_buf[256];
+
+	if (req->opcode != IORING_OP_POLL_ADD)
+		return;
+
+	poll = io_kiocb_to_cmd(req, struct io_poll);
+
+	seq_printf(m, "  op=%d (POLL_ADD), task_works=%d, events=%s, ",
+		   req->opcode, task_work_pending(req->tctx->task),
+		   poll_events_to_str(poll->events, events_buf,
+				       sizeof(events_buf)));
+
+	/* Get file information */
+	if (req->file) {
+		struct file *file = req->file;
+		
+		/* Check if this is a fixed/registered file */
+		if (req->flags & REQ_F_FIXED_FILE) {
+			/*
+			 * For fixed files, try to find the index in file table
+			 */
+			for (unsigned int i = 0; i < req->ctx->file_table.data.nr; i++) {
+				if (req->ctx->file_table.data.nodes[i] &&
+				    io_slot_file(req->ctx->file_table.data.nodes[i]) == file) {
+					seq_printf(m, "fixed_fd=%u", i);
+					goto path_done;
+				}
+			}
+			/*
+			 * Fallback if we can't find the fixed file index
+			 */
+			seq_puts(m, "fixed_fd=<unknown>");
+			goto path_done;
+		} else {
+			/*
+			 * For regular files, try to show the file path first.
+			 * If that's not available, fallback to inode number.
+			 */
+			struct path *path = &file->f_path;
+
+			if (path->dentry && path->mnt) {
+				seq_puts(m, "path=");
+				seq_file_path(m, file, " \t\n\\");
+			} else if (file->f_inode) {
+				seq_printf(m, "ino=%lu", file->f_inode->i_ino);
+			} else {
+				seq_puts(m, "file=<unknown>");
+			}
+		}
+	} else {
+		seq_puts(m, "file=<unknown>");
+	}
+
+path_done:
+	seq_puts(m, "\n");
+}
 
 static void __io_uring_show_fdinfo(struct io_ring_ctx *ctx, struct seq_file *m)
 {
@@ -197,9 +297,15 @@ static void __io_uring_show_fdinfo(struct io_ring_ctx *ctx, struct seq_file *m)
 		struct io_hash_bucket *hb = &ctx->cancel_table.hbs[i];
 		struct io_kiocb *req;
 
-		hlist_for_each_entry(req, &hb->list, hash_node)
-			seq_printf(m, "  op=%d, task_works=%d\n", req->opcode,
-					task_work_pending(req->tctx->task));
+		hlist_for_each_entry(req, &hb->list, hash_node) {
+			if (req->opcode == IORING_OP_POLL_ADD) {
+				show_poll_info(m, req);
+			} else {
+				seq_printf(m, "  op=%d, task_works=%d\n",
+					   req->opcode,
+					   task_work_pending(req->tctx->task));
+			}
+		}
 	}
 
 	seq_puts(m, "CqOverflowList:\n");
